@@ -32,6 +32,15 @@ def _resource_dir() -> Path:
 BASE_DIR = _app_dir()             # 可写：.env、运行期数据
 RESOURCE_DIR = _resource_dir()    # 只读：ui/ 等前端资源
 
+# 运行期数据根目录：所有记忆 / 遥测库统一收进这一个文件夹，不再散落到源码目录里
+# （以前是 memory/data、memory/short_term/data、memory/long_term/data、core/telemetry/data 四处）。
+#     data/memory/      短期 · 长期 · 知识库 · 状态 · 技能 · 中断续跑 · 审计
+#     data/telemetry/   调试后台的 trace 库
+# 【必须走 BASE_DIR，不能用 __file__ 推导】单文件打包后 __file__ 指向解包临时目录
+# （%TEMP%\_MEIxxxx），数据会随进程退出被清空——重启即丢全部记忆（会话、长期记忆、
+# 知识库、状态规则、技能、中断续跑台账），而且会往 C 盘写。
+DATA_DIR = BASE_DIR / "data"
+
 load_dotenv(BASE_DIR / ".env")  # 读取本地密钥配置（已被 .gitignore 拦截）
 
 # ===== LLM 配置槽（所有智能体共用，OpenAI 兼容协议）=====
@@ -77,6 +86,17 @@ SKILL_HOT_INJECT_TOP: int = int(os.getenv("SKILL_HOT_INJECT_TOP", "3"))
 
 # 总结智能体模型（默认跟随主模型 glm-5.3-flash）
 SUMMARIZER_MODEL: str = os.getenv("SUMMARIZER_MODEL", "").strip() or MODEL_ID
+
+# ===== 中断续跑 + 思考流配置槽（memory/interrupt/ + core/telemetry/live.py）=====
+# 中断续跑提示注入开关：True 时把「上次被打断到哪一步 / 哪个工具被用户打断」注入下一轮
+# 上下文，实现自动续跑；关闭后中断日志仍照常落库，只是不再自动注入
+INTERRUPT_RESUME_INJECT: bool = os.getenv("INTERRUPT_RESUME_INJECT", "1") == "1"
+
+# 聊天框「思考过程」单轮最多保留的步骤条数（超出丢最旧；纯展示用，防界面过长）
+LIVE_THINK_MAX_STEPS: int = int(os.getenv("LIVE_THINK_MAX_STEPS", "40"))
+
+# 运行态（含打断标记）在内存中的保留时长（秒），超时自动回收
+LIVE_THINK_TTL_SECONDS: int = int(os.getenv("LIVE_THINK_TTL_SECONDS", "1800"))
 
 # ===== 约束层配置槽（core/constraint/，见 README 约束层章节）=====
 # 单轮输入长度上限（字符数；超长否决，防 token 灌注）
@@ -185,6 +205,6 @@ TOOL_PLANNING_ROUNDS_BASE: int = int(os.getenv("TOOL_PLANNING_ROUNDS_BASE", "2")
 # MCP 协议：版本号 / 传输方式（inprocess=同进程直连；stdio=独立 server 进程）
 MCP_PROTOCOL_VERSION: str = os.getenv("MCP_PROTOCOL_VERSION", "2024-11-05")
 MCP_TRANSPORT: str = os.getenv("MCP_TRANSPORT", "inprocess").strip().lower()
-MCP_SERVER_NAME: str = os.getenv("MCP_SERVER_NAME", "sellpilot-tool-server")
+MCP_SERVER_NAME: str = os.getenv("MCP_SERVER_NAME", "quote-tool-server")
 MCP_SERVER_VERSION: str = "1.0.0"
 

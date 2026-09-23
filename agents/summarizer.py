@@ -35,7 +35,7 @@ L1_SCHEMA = {
 }
 
 SUMMARIZER_PROMPT = (
-    "你是 SellPilot 卖家工作台的专职记忆总结员（权限 L1）。"
+    "你是 Quote Agent 卖家工作台的专职记忆总结员（权限 L1）。"
     "请把下面的对话总结为一级总结 JSON（保留细节，不得虚构），严格遵守以下 schema：\n"
     + json.dumps(L1_SCHEMA, ensure_ascii=False)
     + "\n规则：\n"
@@ -48,7 +48,7 @@ SUMMARIZER_PROMPT = (
 
 # ---- 二级总结范式（长期记忆条目，见 memory-system-design.md §4.3）-------------------
 L2_PROMPT = (
-    "你是 SellPilot 卖家工作台的长期记忆整理员（权限 L1）。"
+    "你是 Quote Agent 卖家工作台的长期记忆整理员（权限 L1）。"
     "下面是最近 {n} 个谈话的一级总结（JSON 列表）。请滚动合并，废除无用信息"
     "（闲聊、重复、已解决旧事），只保留关键信息，输出一个 JSON 数组，"
     "每项符合：\n"

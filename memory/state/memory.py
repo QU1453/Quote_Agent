@@ -39,7 +39,7 @@ class StateMemory:
     """死规则表 + 注入器。写 L3 / 改 L3 / 读（只经注入器自动发生）。"""
 
     def __init__(self, base_dir: str | Path | None = None):
-        base = Path(base_dir) if base_dir else Path(__file__).resolve().parent.parent / "data"
+        base = Path(base_dir) if base_dir else config.DATA_DIR / "memory"
         self.db_path = base / "state.sqlite"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)

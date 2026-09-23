@@ -86,12 +86,14 @@ class Supervisor:
         return self.customer_service.model
 
     def answer(self, question: str, session_id: str = "default",
-               extra_system: list[str] | None = None) -> dict | None:
+               extra_system: list[str] | None = None,
+               request_id: str = "") -> dict | None:
         """按意图路由到专职智能体作答；多轮记忆由 memory/ 的 checkpointer 托管。
 
         被选智能体不可用 / 失败时，退而尝试客服智能体；仍失败返回 None，
         由调用方（orchestrator / server）走本地规则兜底。
         extra_system：编排层注入的五模块记忆上下文块（见 core/perception/context.py）。
+        request_id：本轮运行态标识（思考流展示 + 打断检查点）。
         """
         name = self._route(question)
         # 登记该谈话最近一轮由谁处理（谈话注册表，供结束总结 / 窗口原文取回）
@@ -102,14 +104,15 @@ class Supervisor:
         # 会话 ID 按智能体隔离（presales:xxx / customer_service:xxx，经 agent_session_id
         # 唯一出口生成），避免多个智能体共享同一 thread_id 导致记忆互相串台
         result = self.specialists[name].answer(
-            question, session_id=agent_session_id(name, session_id), extra_system=extra_system)
+            question, session_id=agent_session_id(name, session_id),
+            extra_system=extra_system, request_id=request_id)
         if result is not None:
             result["route"] = name
         if result is None and name != "customer_service":
             # 主选智能体不可用（如未配 Key），退回客服智能体再试一次
             result = self.customer_service.answer(
                 question, session_id=agent_session_id("customer_service", session_id),
-                extra_system=extra_system)
+                extra_system=extra_system, request_id=request_id)
             if result is not None:
                 result["route"] = "customer_service"
         return result

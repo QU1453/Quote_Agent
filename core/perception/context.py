@@ -3,6 +3,7 @@
 
 原则（见 docs/memory-system-design.md §7）：
 - 死规则（状态记忆）必须每次都注入；
+- 中断续跑提示（中断日志）优先注入：上一次被打断的活要能接着干；
 - 长期记忆条目取最近 N 条（精确事实优先）；
 - 知识库只注入「索引简述」（第一阶段），正文由智能体按需 fetch_knowledge；
 - 短期窗口只注入最近谈话的「话题列表」行（细节留给 checkpointer 历史）；
@@ -10,7 +11,8 @@
 - 每块独立开关由 config 控制，任何一块损坏都不影响其它块（旁路 try/except）。
 
 返回 dict：
-    {"blocks": {"rules": str, "facts": str, "kb_index": str, "window_topics": str, "hot_skills": str},
+    {"blocks": {"rules": str, "resume": str, "facts": str, "kb_index": str,
+                "window_topics": str, "hot_skills": str},
      "estimated_tokens": int, "nonempty": [块名列表]}
 """
 from __future__ import annotations
@@ -29,7 +31,7 @@ def assemble_context(mm, user_id: str, session_id: str = "",
                      agent_name: str = "", question: str = "") -> dict:
     """组装一次推理的全部系统上下文块（旁路容错：任何一块异常都置空，不抛错）。"""
     uid = str(user_id or session_id or "default")
-    blocks: dict[str, str] = {"rules": "", "facts": "", "kb_index": "",
+    blocks: dict[str, str] = {"rules": "", "resume": "", "facts": "", "kb_index": "",
                               "window_topics": "", "hot_skills": ""}
 
     # 1) 死规则注入（状态记忆）：每次必带；总开关关闭时返回空串
@@ -39,7 +41,14 @@ def assemble_context(mm, user_id: str, session_id: str = "",
     except Exception:  # noqa: BLE001
         blocks["rules"] = ""
 
-    # 2) 长期记忆条目（最近 N 条范式条目：画像/事实/待办/偏好）
+    # 2) 中断续跑提示（中断日志）：上次被打断到哪一步、哪个工具是被用户打断的
+    try:
+        if config.INTERRUPT_RESUME_INJECT:
+            blocks["resume"] = mm.interrupt_block(session_id or uid)
+    except Exception:  # noqa: BLE001
+        blocks["resume"] = ""
+
+    # 3) 长期记忆条目（最近 N 条范式条目：画像/事实/待办/偏好）
     try:
         entries = mm.long_term.get_long_term_entries(uid, limit=_LT_ENTRIES)
         if entries:
@@ -52,7 +61,7 @@ def assemble_context(mm, user_id: str, session_id: str = "",
     except Exception:  # noqa: BLE001
         blocks["facts"] = ""
 
-    # 3) 知识库索引简述（第一阶段：只给索引，省 token）
+    # 4) 知识库索引简述（第一阶段：只给索引，省 token）
     try:
         idx = mm.get_index(user_id=uid, limit=_KB_INDEX_LIMIT)
         if idx:
@@ -64,7 +73,7 @@ def assemble_context(mm, user_id: str, session_id: str = "",
     except Exception:  # noqa: BLE001
         blocks["kb_index"] = ""
 
-    # 4) 短期窗口：最近已结束谈话的话题列表（细节留在 checkpoint 历史里）
+    # 5) 短期窗口：最近已结束谈话的话题列表（细节留在 checkpoint 历史里）
     try:
         window = mm.window_context(user_id=uid)
         topics = [
@@ -76,7 +85,7 @@ def assemble_context(mm, user_id: str, session_id: str = "",
     except Exception:  # noqa: BLE001
         blocks["window_topics"] = ""
 
-    # 5) 热技能预注入（技能记忆 TOP 条：遇到类似情况可直接复用）
+    # 6) 热技能预注入（技能记忆 TOP 条：遇到类似情况可直接复用）
     try:
         hot = mm.hot_skills(top=config.SKILL_HOT_INJECT_TOP)
         if hot:
@@ -87,7 +96,7 @@ def assemble_context(mm, user_id: str, session_id: str = "",
     except Exception:  # noqa: BLE001
         blocks["hot_skills"] = ""
 
-    # 6) 五段预算封顶（预算熔断·上下文分配）：输出预留 15% 不注入，其余各段按归属裁剪；
+    # 7) 五段预算封顶（预算熔断·上下文分配）：输出预留 15% 不注入，其余各段按归属裁剪；
     #    纯程序裁剪（零 token / 零 LLM），故障时退回未裁剪块（旁路容错）
     try:
         from core.constraint import get_constraint_layer

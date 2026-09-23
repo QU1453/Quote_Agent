@@ -48,17 +48,18 @@ class MemoryManager:
         ann_overfetch: int = 50,
         auto_save: bool = True,
     ):
-        base = Path(base_dir) if base_dir else Path(__file__).resolve().parent
+        # 所有记忆库都收在 data/memory/ 下（config.DATA_DIR 是运行期数据根目录）
+        base = Path(base_dir) if base_dir else config.DATA_DIR / "memory"
         # 实例注入优先（如 get_memory() 复用 get_short_term() 单例，全程单连接）；
         # 未注入时按 base_dir 自建（原行为不变）
         self.short_term = short_term or ShortTermMemory(
-            base / "short_term" / "data" / "short_term.sqlite",
+            base / "short_term" / "short_term.sqlite",
             window_size=window_size,
             compressor=Compressor(llm=llm, compress_threshold=compress_threshold, keep_recent=keep_recent),
         )
         self.long_term = long_term or LongTermMemory(
-            base / "long_term" / "data" / "long_term.sqlite",
-            base / "long_term" / "data" / "memories.hnsw",
+            base / "long_term" / "long_term.sqlite",
+            base / "long_term" / "memories.hnsw",
             provider=embedding_provider or pick_provider(),
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
@@ -68,12 +69,13 @@ class MemoryManager:
             overfetch=ann_overfetch,
             auto_save=auto_save,
         )
-        # 知识库 / 状态记忆 / 技能记忆：独立 SQLite（memory/data/ 下），
+        # 知识库 / 状态记忆 / 技能记忆：各自独立 SQLite，都落在 base（= data/memory）下，
         # 均可注入实例（复用连接）；未注入时按 base_dir 懒加载（见 state / skill 属性）
         self._base = base
-        self.knowledge = knowledge or KnowledgeBase(base / "data", llm=llm, chunk_size=chunk_size)
+        self.knowledge = knowledge or KnowledgeBase(base, llm=llm, chunk_size=chunk_size)
         self._state = state
         self._skill = skill
+        self._interrupt = None
 
     @property
     def state(self):
@@ -81,7 +83,7 @@ class MemoryManager:
         if self._state is None:
             from .state.memory import StateMemory
 
-            self._state = StateMemory(self._base / "data")
+            self._state = StateMemory(self._base)
         return self._state
 
     @property
@@ -90,8 +92,17 @@ class MemoryManager:
         if self._skill is None:
             from .skill.memory import SkillMemory
 
-            self._skill = SkillMemory(self._base / "data")
+            self._skill = SkillMemory(self._base)
         return self._skill
+
+    @property
+    def interrupt(self):
+        """中断日志（被打断交互的可续跑台账）懒加载单例。"""
+        if self._interrupt is None:
+            from .interrupt.memory import InterruptLog
+
+            self._interrupt = InterruptLog(self._base)
+        return self._interrupt
 
     # ================= 谈话维度（分层总结管线） =================
     @property
@@ -99,9 +110,10 @@ class MemoryManager:
         """谈话注册表：生命周期 + 一级总结归属 + 二级总结游标。"""
         return self.short_term.registry
 
-    def start_conversation(self, session_id: str, user_id: str = "") -> None:
-        """登记谈话开始（幂等）。"""
-        self.short_term.registry.start(session_id, user_id=user_id)
+    def start_conversation(self, session_id: str, user_id: str = "",
+                           scope: str = "") -> None:
+        """登记谈话开始（幂等）；scope 为业务线（research/listing/global，可选）。"""
+        self.short_term.registry.start(session_id, user_id=user_id, scope=scope)
 
     def end_conversation(self, session_id: str, summary_json: str = "") -> None:
         """结束谈话；带总结时标记 summarized。"""
@@ -162,6 +174,28 @@ class MemoryManager:
         if top is None:
             top = config.SKILL_HOT_INJECT_TOP
         return self.skill.hot_skills(top=int(top))
+
+    # ================= 中断日志（被打断交互的可续跑台账） =================
+    def log_interrupt(self, session_id: str, **fields) -> int:
+        """落一条中断记录：停在哪一步 / 已完成与被打断的工具 / 已产出的部分内容（写 L0）。"""
+        return self.interrupt.log_interrupt(session_id, **fields)
+
+    def interrupt_block(self, session_id: str) -> str:
+        """续跑提示块（「上次未完成」）；无待续跑记录返回空串。"""
+        return self.interrupt.inject_block(session_id)
+
+    def latest_interrupt(self, session_id: str) -> dict | None:
+        """该会话最近一条待续跑记录（open）。"""
+        return self.interrupt.latest_open(session_id)
+
+    def resolve_interrupt(self, session_id: str, note: str = "", caller=None) -> int:
+        """本轮正常完成 → 把该会话待续跑记录标记为已续跑，返回条数。"""
+        return self.interrupt.resolve_open(session_id, note=note, caller=caller)
+
+    def list_interrupts(self, limit: int = 50, session_id: str = "",
+                        status: str = "") -> list[dict]:
+        """近期中断记录（倒序）——调试后台面板数据源。"""
+        return self.interrupt.list_recent(limit=limit, session_id=session_id, status=status)
 
     # ================= LLM 输入接口（对话消息） =================
     @property

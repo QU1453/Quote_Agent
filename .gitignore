@@ -44,6 +44,9 @@ tmp/
 temp/
 *.tmp
 
+# ===== 桌面版 WebView2 缓存（跨启动保留 HTTP 缓存用，不入库）=====
+.webview/
+
 # ===== IDE / 系统 =====
 .idea/
 *.swp
@@ -66,13 +69,9 @@ checkpoints/
 *.sqlite
 *.sqlite3
 
-# ===== Memory 模块运行时数据（checkpoint / 向量索引 / 审计库，不入库）=====
-memory/*/data/
-memory/data/
+# ===== 运行期数据（记忆 / 遥测库统一收在 data/ 下，不入库）=====
+data/
 memory/demo_data/
-
-# ===== 遥测模块运行时数据（调试后台 trace/events 库，不入库）=====
-core/telemetry/data/
 .tmp/
 
 # ===== 前端分享包产物（二进制构建产物，不入库；.dockerignore 已排除）=====

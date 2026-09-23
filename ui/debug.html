@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>SellPilot 控制室 · 智能体调试后台</title>
+<title>Quote Agent 控制室 · 智能体调试后台</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@600;900&family=IBM+Plex+Mono:wght@400;500;700&family=Zen+Kaku+Gothic+New:wght@500;700&display=swap" rel="stylesheet">
@@ -22,7 +22,7 @@
     <div class="brand">
       <div class="brand-mark">械</div>
       <div>
-        <h1>SellPilot 控制室</h1>
+        <h1>Quote Agent 控制室</h1>
         <p class="sub">智能体遥测 · 工具调用 · TOKEN 观测 <span class="live-dot" id="liveDot"></span><span id="liveText">待机</span></p>
       </div>
     </div>
@@ -88,9 +88,28 @@
     <ul class="err-list" id="errList"></ul>
   </section>
 
+  <!-- ===== 中断记录（被打断交互的可续跑台账） ===== -->
+  <section class="panel" id="panelInterrupts">
+    <h2><i class="panel-no">05</i>中断记录 INTERRUPT LOG
+      <span class="panel-hint">停在哪一步 · 哪个工具被用户打断 · 是否已被下一轮接手</span>
+      <span class="filter-count" id="intStats">—</span>
+    </h2>
+    <div class="table-wrap">
+      <table class="trace-table">
+        <thead>
+          <tr>
+            <th>时间</th><th>会话</th><th>路由</th><th>停在哪</th>
+            <th>已完成工具</th><th>被打断的工具</th><th>打断方</th><th>续跑状态</th>
+          </tr>
+        </thead>
+        <tbody id="intBody"><tr><td colspan="8" class="empty">暂无中断记录（去工作台点一次「打断」试试）</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- ===== trace 表格 ===== -->
   <section class="panel">
-    <h2><i class="panel-no">05</i>运行记录 TRACE LOG</h2>
+    <h2><i class="panel-no">06</i>运行记录 TRACE LOG</h2>
     <div class="filters">
       <select id="filterSession" aria-label="按会话过滤"><option value="">全部会话</option></select>
       <select id="filterRoute" aria-label="按路由过滤">

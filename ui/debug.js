@@ -1,5 +1,5 @@
 /* =====================================================================
-   SellPilot 控制室 · 调试后台前端逻辑
+   Quote Agent 控制室 · 调试后台前端逻辑
    数据源：/api/telemetry/*（summary / traces / traces/{id} / trend / clear）
    纯原生 JS，无依赖；轮询默认关闭
    ===================================================================== */
@@ -212,16 +212,55 @@ async function loadTrend(sessionId) {
     ${dots}`;
 }
 
+/* ---- 中断记录（被打断交互的可续跑台账，数据源 /api/interrupt/recent） ---- */
+const INT_STAGE = { perception: "输入解析", context: "记忆装配", thinking: "思考推理",
+                    tool: "工具调用", output: "输出整理" };
+const INT_STATUS = { open: ["待续跑", "st-open"], resumed: ["已接手", "st-ok"],
+                     closed: ["已关闭", "st-closed"] };
+
+function renderInterrupts(data) {
+  const recs = (data && data.records) || [];
+  const st = (data && data.stats) || {};
+  $("intStats").textContent =
+    `待续跑 ${st.open || 0} · 已接手 ${st.resumed || 0} · 已关闭 ${st.closed || 0}`;
+  const body = $("intBody");
+  if (!recs.length) {
+    body.innerHTML = '<tr><td colspan="8" class="empty">暂无中断记录（去工作台点一次「打断」试试）</td></tr>';
+    return;
+  }
+  body.innerHTML = recs.map((r) => {
+    const [label, cls] = INT_STATUS[r.status] || [r.status || "—", ""];
+    const who = r.tool_interrupted_by_user
+      ? '<span class="badge st-open">用户打断</span>'
+      : `<span class="badge route">${esc(r.interrupted_by || "system")}</span>`;
+    const tools = (r.completed_tools || []).length
+      ? esc(r.completed_tools.join("、")) : "—";
+    return `
+    <tr class="data-row" title="Q: ${esc(r.question || "")}">
+      <td>${esc(fmtTs(r.created_at))}</td>
+      <td title="${esc(r.session_id)}">${esc(String(r.session_id || "").slice(-12))}</td>
+      <td><span class="badge route">${esc(r.route || "—")}</span></td>
+      <td>第 ${r.step_index || 0} 步 · ${esc(INT_STAGE[r.stage] || r.stage || "—")}</td>
+      <td>${tools}</td>
+      <td>${r.pending_tool ? esc(r.pending_tool) : "—"}</td>
+      <td>${who}</td>
+      <td><span class="badge ${esc(cls)}">${esc(label)}</span></td>
+    </tr>`;
+  }).join("");
+}
+
 /* ---- 刷新入口 ---- */
 async function refresh() {
   try {
     const sid = $("filterSession").value, route = $("filterRoute").value;
-    const [summary, list] = await Promise.all([
+    const [summary, list, interrupts] = await Promise.all([
       api("/api/telemetry/summary"),
       api(`/api/telemetry/traces?limit=100${sid ? `&session_id=${encodeURIComponent(sid)}` : ""}${route ? `&route=${route}` : ""}`),
+      api(`/api/interrupt/recent?limit=50${sid ? `&session_id=${encodeURIComponent(sid)}` : ""}`),
     ]);
     renderSummary(summary);
     renderTraces(list.traces || []);
+    renderInterrupts(interrupts);
     if (state.trendSession) loadTrend(state.trendSession);
     setLive("正常 · " + fmtTs(new Date().toISOString().slice(0, 19).replace("T", " ")), false);
   } catch {

@@ -8,7 +8,7 @@ tool.name/parameters、openinference.span.kind）+ 本项目特有维度（route
 旁路容错（fail-open）：所有写入/查询方法内部吞异常——
 遥测是观测工具，任何故障都不得影响问答主链路；查询失败返回空结果。
 
-存储：core/telemetry/data/telemetry.sqlite（WAL，单进程假设，与审计库同模式）；
+存储：data/telemetry/telemetry.sqlite（WAL，单进程假设，与审计库同模式）；
 目录已被 .gitignore 拦截，运行时数据绝不入库。
 
 数据模型：
@@ -23,7 +23,10 @@ import threading
 from pathlib import Path
 from typing import Any
 
-_DB_PATH = Path(__file__).resolve().parent / "data" / "telemetry.sqlite"
+import config
+
+# 遥测库路径走 config.DATA_DIR（不能用 __file__：打包后会落到解包临时目录，重启即丢）
+_DB_PATH = config.DATA_DIR / "telemetry" / "telemetry.sqlite"
 
 # 当前线程活跃的 trace（GLOBAL_REGISTRY.call 等无 trace 上下文的埋点方挂靠用；
 # orchestrator 在 answer() 开头 set、结尾 clear，旁路埋点据此归并到正确 trace）

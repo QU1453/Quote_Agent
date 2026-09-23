@@ -26,7 +26,7 @@ _SKILL_SCHEMA = {
 }
 
 SKILL_WRITER_PROMPT = (
-    "你是 SellPilot 卖家工作台的技能提炼员（权限 L2）。"
+    "你是 Quote Agent 卖家工作台的技能提炼员（权限 L2）。"
     "请阅读下面的复盘文本，从中提炼可复用的技能条目，输出 JSON 数组，每项符合：\n"
     + json.dumps(_SKILL_SCHEMA, ensure_ascii=False)
     + "\n规则：\n"

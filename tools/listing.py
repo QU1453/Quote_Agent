@@ -17,7 +17,7 @@ registry = LocalRegistry("tools.listing")
 # 标题 / 关键词 / 五点 演示模板（真实版接 Listing 优化 AI 服务）
 _LISTING_DRAFT = {
     "云感耳机": {
-        "brand": "SellPilot",
+        "brand": "Quote",
         "core": "Wireless Earbuds with ANC",
         "attrs": "HiFi Stereo / 36H Playtime / IPX5",
         "scene": "for Sports & Commuting",
@@ -32,6 +32,14 @@ _LISTING_DRAFT = {
     },
 }
 
+# A+ 页面模块建议（演示模板，真实版接 A+ 内容管理接口）
+_A_PLUS = [
+    {"module": "品牌故事", "content": "一句话品牌理念 + 使用场景图"},
+    {"module": "卖点图解", "content": "核心卖点逐条配图（与五点呼应）"},
+    {"module": "规格参数表", "content": "尺寸 / 重量 / 材质 / 兼容性"},
+    {"module": "FAQ", "content": "保修政策 + 常见问题 3 条"},
+]
+
 
 def _draft_for(product_name: str) -> dict:
     for key, draft in _LISTING_DRAFT.items():
@@ -39,7 +47,7 @@ def _draft_for(product_name: str) -> dict:
             return draft
     # 未命中模板：用通用构件兜底（结果可继续人工修改）
     return {
-        "brand": "SellPilot",
+        "brand": "Quote",
         "core": (product_name or "Product").strip(),
         "attrs": "High Quality / Durable / Easy to Use",
         "scene": "for Daily Use",
@@ -84,6 +92,7 @@ def draft_listing(product_name: str, keywords: list | None = None) -> str:
         "title_len": len(title),
         "bullets": d["bullets"],
         "search_terms": search_terms,
+        "a_plus": _A_PLUS,
         "tips": ["标题 ≤75 字符（亚马逊 2025 新规）", "五点每点首词大写、先答核心问题",
                 "Search Terms 不要重复标题词、不要竞品品牌词"],
     }, ensure_ascii=False)
@@ -103,29 +112,35 @@ def draft_listing(product_name: str, keywords: list | None = None) -> str:
     cost="low",
 )
 def check_images(image_urls: list | None = None) -> str:
-    """图片合规自检：白底 RGB255 / 主体占比 ≥85% / 无文字水印（演示规则）。"""
+    """图片合规自检：主图 7 项规范（白底/占比/水印/放大镜/附图数量）逐项检查（演示规则）。"""
     urls = [str(u).strip() for u in (image_urls or []) if str(u).strip()]
     if not urls:
-        return json.dumps({"found": False, "hint": "请提供至少一个图片 URL"}, ensure_ascii=False)
-    checks = []
-    for i, url in enumerate(urls, start=1):
-        # 演示规则：以 URL 特征模拟检测结果（真实版接机器视觉检测服务）
-        clean = "text" not in url.lower() and "watermark" not in url.lower()
-        checks.append({
-            "image_no": i,
-            "url": url[:80],
-            "white_bg": "rgb255" in url.lower() or "white" in url.lower(),
-            "ratio_ok": True,
-            "no_text_watermark": clean,
-            "passed": clean,
-        })
-    passed = sum(1 for c in checks if c["passed"])
+        return json.dumps({"found": False,
+                           "hint": "未提供图片地址；需至少 1 张主图（白底、≥1600px），附图建议 5~8 张"},
+                          ensure_ascii=False)
+    main = urls[0]
+    extra = urls[1:]
+    low = main.lower()
+    looks_placeholder = any(k in low for k in ("placeholder", "demo", "sample"))
+    checks = {
+        "主图为可访问直链": main.startswith("http"),
+        "主图疑似白底（非占位图）": not looks_placeholder,
+        "主图无水印文字标记": not any(k in low for k in ("watermark", "wm_", "logo")),
+        "附图数量≥5": len(extra) >= 5,
+        "图片总数≤9（主图+附图上限）": len(urls) <= 9,
+        "无重复图片": len(set(urls)) == len(urls),
+        "附图含场景/细节图（按命名判断）": any(
+            k in u.lower() for u in extra for k in ("scene", "detail", "lifestyle")),
+    }
+    failed = [k for k, v in checks.items() if not v]
     return json.dumps({
         "found": True,
-        "total": len(urls),
-        "passed_count": passed,
-        "detail": checks,
-        "hint": "主图必须纯白底(255,255,255)、商品占比≥85%、无文字/水印/Logo；未通过项请修图后重检。",
+        "main_image": main,
+        "extra_count": len(extra),
+        "checks": checks,
+        "passed": not failed,
+        "failed_items": failed,
+        "hint": "演示规则仅按 URL 特征判断；真实版接图片识别 API 检查白底/占比/水印/分辨率（≥1600px 触发放大镜）。",
     }, ensure_ascii=False)
 
 
@@ -207,5 +222,67 @@ def recommend_fulfillment(product_code: str, stock: int) -> str:
     }, ensure_ascii=False)
 
 
-__all__ = ["draft_listing", "check_images", "price_strategy", "recommend_fulfillment",
-           "registry"]
+@registry.register(
+    name="audit_listing",
+    description=(
+        "何时使用：Listing 发布前的合规自检——标题长度/五点数量/违禁极限词/图片数量一次审完。"
+        "用户问“这个 Listing 能不能上架/帮我查查有没有违规词”时调用。\n"
+        '调用格式：{"tool": "audit_listing", "parameters": {"title": "<标题，字符串类型>",'
+        ' "bullets": "<五点描述整段文本，各点用|分隔，字符串类型，可省略>",'
+        ' "images": "<图片张数，字符串数字，可省略>"}}\n'
+        "参数说明：\n"
+        "- title：Listing 标题，字符串类型（string）；\n"
+        "- bullets：五点描述整段文本，各点用 | 分隔，字符串类型（string），可省略；\n"
+        '- images：图片张数，字符串数字（string），如 "6"，可省略，默认 "0"。'
+    ),
+    schema={"title": "string 标题", "bullets": "string 五点（|分隔）", "images": "string 图片张数"},
+    level="L0",
+    cost="low",
+)
+def audit_listing(title: str, bullets: str = "", images: str = "0") -> str:
+    """Listing 合规审计：标题 / 五点 / 违禁词 / 图片数量逐项检查。"""
+    t = str(title or "").strip()
+    points = [p.strip() for p in str(bullets or "").split("|") if p.strip()]
+    try:
+        n_imgs = max(0, int(float(images)))
+    except (TypeError, ValueError):
+        n_imgs = 0
+    banned = ["最好", "第一", "顶级", "最便宜", "100%", "正品保障", "终身保修", "特效"]
+    text = t + " " + " ".join(points)
+    hit_banned = [w for w in banned if w in text]
+    checks = {
+        "标题长度≤75（2025 新规）": 0 < len(t) <= 75,
+        "标题≥40字符（过短浪费流量位）": len(t) >= 40,
+        "五点数量 3~5 条": 3 <= len(points) <= 5,
+        "每点≤200字符": all(len(p) <= 200 for p in points),
+        "无违禁极限词": not hit_banned,
+        "图片数量 1~9 张": 1 <= n_imgs <= 9,
+    }
+    failed = [k for k, v in checks.items() if not v]
+    suggestions = []
+    if len(t) > 75:
+        suggestions.append("标题截断到 75 字符内：品牌+核心词+属性+场景。")
+    if 0 < len(t) < 40:
+        suggestions.append("标题过短，补上材质/规格/使用场景等属性词。")
+    if len(points) < 3:
+        suggestions.append("五点至少补到 3 条（建议 5 条）：卖点/续航/材质/场景/售后各一条。")
+    if hit_banned:
+        suggestions.append(f"移除违禁词：{'、'.join(hit_banned)}（平台极限词禁用）。")
+    if n_imgs < 6:
+        suggestions.append("图片建议主图 + 5 张以上附图（场景图/细节图/尺寸图）。")
+    return json.dumps({
+        "found": bool(t),
+        "title_len": len(t),
+        "bullet_count": len(points),
+        "image_count": n_imgs,
+        "banned_hit": hit_banned,
+        "checks": checks,
+        "passed": not failed,
+        "failed_items": failed,
+        "suggestions": suggestions,
+        "hint": "本审计覆盖演示规则；正式上架前建议再过一遍平台类目审核要求。",
+    }, ensure_ascii=False)
+
+
+__all__ = ["draft_listing", "check_images", "audit_listing", "price_strategy",
+           "recommend_fulfillment", "registry"]

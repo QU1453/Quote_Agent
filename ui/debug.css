@@ -1,5 +1,5 @@
 /* =====================================================================
-   SellPilot 控制室 · 智能体调试后台
+   Quote Agent 控制室 · 智能体调试后台
    深色机房风格：炭黑底 / 示波器绿 + 朱色告警 / 等宽数据
    与主工作台（暖纸店铺）刻意形成「前台/机房」反差
    ===================================================================== */
@@ -202,6 +202,9 @@ body {
 .badge.mode-constraint { color: #fff; background: var(--accent); }
 .badge.st-ok { color: var(--green); }
 .badge.st-error { color: var(--err); font-weight: 700; }
+/* 中断日志的续跑状态（与 /api/interrupt/recent 对应）：待续跑需醒目、已关闭转灰 */
+.badge.st-open { color: #101312; background: var(--warn); }
+.badge.st-closed { color: var(--ink-3); border: 1px solid var(--line-2); }
 .tok-cell { color: var(--green); font-weight: 700; }
 .tok-cell.none { color: var(--ink-3); font-weight: 400; }
 

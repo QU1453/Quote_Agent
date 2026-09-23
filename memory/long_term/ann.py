@@ -13,7 +13,27 @@ import math
 import threading
 from pathlib import Path
 
-import hnswlib
+# hnswlib 为可选依赖：PyPI 上没有 Windows 预编译包，缺 MSVC 时只能源码编译。
+# 缺失时本模块仍可导入（AnnIndex 一实例化才报错），
+# 长期记忆的 facts / 范式条目 / 知识库索引不受影响，仅"向量图索引"降级。
+try:
+    import hnswlib
+except ImportError:  # pragma: no cover - 无 C++ 编译环境的 Windows
+    hnswlib = None
+
+HNSWLIB_AVAILABLE: bool = hnswlib is not None
+
+_HNSWLIB_HINT = (
+    "未安装 hnswlib（PyPI 无 Windows 预编译包，需 Visual C++ Build Tools 源码编译）。"
+    "向量图索引不可用；长期记忆的 facts / 范式条目 / 知识库索引不受影响，"
+    "文档语义召回将退回暴力精确检索（brute_force_recall）。"
+)
+
+
+def _require_hnswlib() -> None:
+    """实例化 ANN 索引前的可用性检查：缺失时给出可操作的报错而非 ModuleNotFoundError。"""
+    if not HNSWLIB_AVAILABLE:
+        raise RuntimeError(_HNSWLIB_HINT)
 
 
 def l2_normalize(vec: list[float]) -> list[float]:
@@ -43,6 +63,7 @@ class AnnIndex:
         overfetch: int = 50,
         initial_capacity: int = 2048,
     ):
+        _require_hnswlib()
         self.dim = dim
         self.space = space
         self.M = M
@@ -116,6 +137,7 @@ class AnnIndex:
     @classmethod
     def load(cls, path: str | Path, dim: int, ef_search: int = 64, overfetch: int = 50) -> "AnnIndex":
         """从 .hnsw 文件恢复索引（绕过 __init__，HNSW 建图参数已在文件内）。"""
+        _require_hnswlib()
         obj = cls.__new__(cls)
         obj.dim = dim
         obj.space = "cosine"

@@ -1,0 +1,278 @@
+================================================================================
+智能体「思考过程」流式显示方案
+Quote Agent · 跨境选品与上架工作台
+版本：v1 · 2026-09-19 · 状态：已实现并实测通过
+================================================================================
+
+
+【零】本文档范围
+--------------------------------------------------------------------------------
+描述「聊天框里实时显示智能体思考了什么、调用了哪些工具」这一功能的完整方案：
+数据流、接口契约、数据结构、线程模型、前端渲染、参数配置、以及不选
+SSE 的理由与升级路径。
+
+配套的另一半功能（打断交互 + 中断日志模块）不在本文档范围内，
+详见 CHANGELOG.md 的「思考过程可视化 + 打断续跑」一节。
+
+
+【一】方案概述
+--------------------------------------------------------------------------------
+一句话：同步问答 + 轮询运行态快照。
+
+  * /api/ask 保持原有「一次性返回最终回复」的契约不变；
+  * 旁边开一条进程内「运行态总线」，agent 每推进一步就往总线追加一条 step；
+  * 前端在等回复期间以 450ms 轮询总线快照，增量渲染小字；
+  * 回复到达后，思考区自动折叠成一行摘要，可点开看全。
+
+核心设计决定：埋点只写数据、不写文案。
+后端不知道用户是中文还是日文，措辞全在前端一张词表里，中日自动切换；
+后端将来新增事件也不会漏翻译。
+
+
+【二】数据流
+--------------------------------------------------------------------------------
+浏览器              FastAPI(线程池)        Orchestrator           Agent(ReAct)
+  |                      |                     |                      |
+  | newRequestId()       |                     |                      |
+  |-- POST /api/ask ---->|                     |                      |
+  |   {request_id}       |-- answer(rid) ----->| begin(rid)           |
+  |                      |                     |-- stage/input        |
+  |                      |                     |-- stage/route        |
+  |                      |                     |-- stage/context      |
+  |                      |                     |-- answer(rid) ------>| stream(updates)
+  |                      |                     |                      |-- llm/think 0
+  |                      |                     |                      |-- llm/think 1
+  |                      |                     |                      |-- tool/X pending
+  |                      |                     |                      |-- tool/X ok
+  |                      |                     |-- stage/output       |
+  |                      |                     |-- finish(rid, done)  |
+  |<-- 200 {reply,...} --|<--------------------|                      |
+  |                      |                     |                      |
+  |-- GET /api/think/{rid} --> snapshot(rid) <--+   (450ms 一次，纯内存读)
+  |<-- {steps[], status} |                     |
+
+要点：轮询读的是内存，不落库、不查 SQLite —— 高频轮询不压任何存储。
+
+
+【三】三条契约
+--------------------------------------------------------------------------------
+┌────────────────┬──────────────────────────────────────────────────────────────┐
+│ 层             │ 契约                                                         │
+├────────────────┼──────────────────────────────────────────────────────────────┤
+│ 埋点方 -> 总线 │ bus.add(request_id, kind, name, detail, status, duration_ms) │
+│                │ 只写数据，不写文案                                           │
+│ 总线 -> HTTP   │ GET /api/think/{request_id}  ->  运行态快照                  │
+│ HTTP -> 前端   │ 前端按 kind/name/detail/status 自行本地化措辞（中日自动切换）│
+└────────────────┴──────────────────────────────────────────────────────────────┘
+
+
+【四】数据结构
+--------------------------------------------------------------------------------
+4.1 运行态（一次请求一条）
+
+  request_id, session_id, route,
+  status:  running | done | interrupted | error,
+  detail, started_at, started_ts, ended_at, elapsed_ms,
+  cancel: bool, cancel_reason: str,
+  seq, steps[]
+
+4.2 单条 step
+
+  { seq, ts, kind, name, detail, status, duration_ms }
+
+4.3 事件清单（kind / name 组合，以及谁在什么时候发）
+
+┌───────┬─────────────────┬──────────────┬──────────────────────┬─────────┐
+│ kind  │ name            │ 触发者       │ detail 内容          │ status  │
+├───────┼─────────────────┼──────────────┼──────────────────────┼─────────┤
+│ stage │ input           │ orchestrator │ —                    │ ok      │
+│ stage │ constraint      │ orchestrator │ 拦截类型             │ deny    │
+│ stage │ route           │ orchestrator │ research/listing/... │ ok      │
+│ stage │ context         │ orchestrator │ "4块 · 812tok"       │ ok      │
+│ stage │ fallback        │ orchestrator │ 路由名               │ ok      │
+│ stage │ output          │ orchestrator │ —                    │ ok      │
+│ llm   │ think           │ agents/base  │ 步号（入口为 0）     │ ok      │
+│ tool  │ <工具名>        │ agents/base  │ 入参摘要 / 结果摘要  │ 见下    │
+│ note  │ resume_found    │ orchestrator │ —                    │ ok      │
+│ note  │ resume_closed   │ orchestrator │ 接手条数             │ ok      │
+│ note  │ interrupt       │ orchestrator │ "stage|pending_tool" │ deny    │
+│ note  │ interrupt_late  │ orchestrator │ —                    │ ok      │
+└───────┴─────────────────┴──────────────┴──────────────────────┴─────────┘
+
+  tool 的四种 status：
+    pending  已决定调用，尚未返回
+    ok       已返回
+    error    执行失败
+    skipped  被短路、未执行（打断专用；前端渲染成琥珀色「未执行（已被打断）」）
+
+
+【五】总线设计（LiveBus）
+--------------------------------------------------------------------------------
+* 按 request_id 隔离
+  request_id 由前端生成（crypto.randomUUID），请求发出前就知道，
+  因此轮询不必等 /api/ask 返回。
+
+* 线程安全
+  /api/ask 在线程池线程执行，/api/ask/interrupt 在另一线程到达，
+  所有读写共用一把 threading.Lock。
+
+* 有界
+  单请求最多 40 条 step（超出丢最旧，保住头部阶段信息）；
+  单条 detail 截断 160 字符。
+
+* 自动回收
+  prune() 清理超过 1800 秒的运行态，防内存膨胀。
+
+* fail-open
+  所有方法吞异常；request_id 为空时全部空转（零开销）。
+  即：未传 request_id 的老调用方，行为与改造前完全一致。
+
+* 与遥测的分工
+  core/telemetry/recorder.py  —— 事后落库（SQLite），给 /debug 看历史统计
+  core/telemetry/live.py      —— 事中内存，给用户看当下
+  同一个 orchestrator 同时喂两边，互不耦合。
+
+
+【六】打断信号如何送进工具（踩过的坑）
+--------------------------------------------------------------------------------
+agents/base.py 的 _stream_run 用 graph.stream(stream_mode="updates") 逐 chunk
+推进；检查点判定放在「每个 chunk 收完之后」，保证同一批消息全部进入本地 msg 列表，
+否则会在对话历史里留下「有 tool_calls 却无 tool 结果」的残破记录。
+
+真正麻烦的是「工具执行前」这个检查点：
+要让工具真不执行，就必须让工具包装器知道「本轮已打断」。
+但实测 LangGraph 把工具丢在 ThreadPoolExecutor-* 线程里执行，
+threading.local 传不进去 —— 短路判定永远为假，打断退化成「工具照跑」。
+
+解法：用 contextvars.ContextVar 保存 request_id
+（orchestrator 在 answer() 开头 set，所有出口 clear），
+工具包装器用 current_cancelled() 判断。
+ContextVar 会随运行上下文传播进工具线程 —— 已用打印线程名 + 变量值实测确认。
+
+三个检查点（协作式打断，单次 LLM 请求发出后无法从外部掐断，这是物理限制）：
+
+  检查点 0  入口        还没开跑就已请求打断  -> 连模型都不调用
+  检查点 1  工具执行前  模型刚决定调工具      -> 工具短路成占位返回，真不执行
+  检查点 2  工具返回后  工具已跑完            -> 不再推进下一步推理
+
+
+【七】前端渲染
+--------------------------------------------------------------------------------
+send()
+  |-- requestId = crypto.randomUUID()
+  |-- panel = showThinking(board)              先放占位呼吸点
+  |-- stopPolling = pollThink(panel, requestId) 立即 tick 一次 + setInterval 450ms
+  |-- a = await askBackend(q, board, requestId)
+  |-- stopPolling()                            回复到达 -> 停止轮询
+  |-- finishThink(panel, steps, status)        兜底收尾，绝不留「进行中」
+  |-- 把 panel 挪进回复消息内部（msg-head 之下、气泡之上），随对话留档
+
+* 增量追加
+  panel.rendered 记录已渲染条数，只 append 新增的 seq，不重绘整块。
+
+* 状态驱动样式
+  data-state = running | done | interrupted | error
+  驱动指示点颜色：松青（进行中，呼吸动画）/ 松青（完成）/ 琥珀（被打断）/ 红（出错）。
+
+* 折叠规则
+  正常完成   -> 移除 is-open，折叠成一行「已思考 N 步 · 调用 M 个工具」
+               （未调用工具时显示「已思考 N 步 · 未调用工具」）
+  被打断     -> 保持展开，让用户直接看清停在哪一步
+  任意时刻   -> 点标题栏可展开 / 收起
+
+* 措辞本地化
+  thinkStepText(s) 按 kind 分发到 I18N[lang] 词表：
+  阶段名、工具四态、note 四态、路由名（research -> 选品 / 選品）全在前端，
+  中日共用同一套后端数据。
+
+
+【八】关键参数
+--------------------------------------------------------------------------------
+┌──────────────────────┬──────────┬───────────────────────────────────────┐
+│ 参数                 │ 值       │ 位置 / 环境变量                        │
+├──────────────────────┼──────────┼───────────────────────────────────────┤
+│ 轮询间隔             │ 450 ms   │ ui/app.js                             │
+│ 单请求 step 上限     │ 40       │ config.LIVE_THINK_MAX_STEPS           │
+│ 单条 detail 截断     │ 160 字符 │ core/telemetry/live.py                │
+│ 运行态保留时长       │ 1800 秒  │ config.LIVE_THINK_TTL_SECONDS         │
+│ /api/think 未命中    │ ok=false │ server.py（status=unknown, steps=[]） │
+└──────────────────────┴──────────┴───────────────────────────────────────┘
+
+三个参数均可通过同名环境变量覆盖。
+
+
+【九】为什么用轮询而不是 SSE
+--------------------------------------------------------------------------------
+1) 本项目的 /api/ask 是同步阻塞流水线（内部要跑 ReAct + 真实 LLM）。
+   SSE 要求端点是 async 的流式响应，要么把整条流水线改成 async（风险大），
+   要么另起事件循环做桥接。
+
+2) 尺度上没必要：一次问答 3-20 秒、步骤 5-15 条。
+   450ms 轮询的延迟用户感知不到，带宽是每次几 KB 的内存读。
+
+3) 少掉长连接、断线重连、代理超时这一堆运维面。
+
+升级到 SSE 的路径（改动面很小，因为埋点与传输已解耦）：
+
+  后端：LiveBus 增加 subscribe() / unsubscribe()，每个订阅者一个 asyncio.Queue；
+        新增一个 async 端点，只做「从队列取 -> yield」，不阻塞；
+  前端：把 setInterval + fetch 换成 EventSource。
+  埋点侧（bus.add 的所有调用点）一行都不用改 —— 这正是「bus.add 不关心
+  谁在消费」这一设计带来的好处。
+
+
+【十】本方案依赖的两个前置修复
+--------------------------------------------------------------------------------
+方案要求「回答进行中，服务仍能响应其他请求」，因此必须先修掉两个缺陷：
+
+1) 事件循环被占死
+   /api/ask、/api/conversation/end、/api/settings/test 原本是 async def，
+   却直接调用阻塞式 LLM -> 占死事件循环。
+   现象：回答期间 /api/think 轮询与打断请求全部超时（实测 60 秒）。
+   修复：改成同步 def，由 FastAPI 自动丢进线程池，并在代码里注明原因。
+
+2) 打断信号跨不了线程
+   见第六节。threading.local -> contextvars.ContextVar。
+
+
+【十一】实测结果（真实 GLM，非模拟）
+--------------------------------------------------------------------------------
+* 打断前可抓到 4 步实时思考流（输入/路由/记忆装配/第 0 步推理），
+  证明「回答未返回时前端已能看到过程」。
+
+* 检查点 1（工具未执行）：
+    思考流   tool run_product_research  pending -> skipped
+    中断日志 stage=tool, step_index=1, completed_tools=[],
+             pending_tool=run_product_research, tool_interrupted_by_user=true
+
+* 检查点 2（工具已跑完）：
+    中断日志 completed_tools=[run_product_research], pending_tool="",
+             tool_interrupted_by_user=false
+
+* 打包成单文件 exe 后，/api/think 与思考流展示同样正常。
+
+
+【附】涉及文件清单（仓库相对路径）
+--------------------------------------------------------------------------------
+新增
+  core/telemetry/live.py            运行态总线：思考流 + 打断信号（本方案核心）
+
+改动
+  agents/base.py                    graph.invoke -> graph.stream 流式驱动 + 检查点
+  core/telemetry/__init__.py        导出 LiveBus / current_cancelled 等
+  core/dispatch/orchestrator.py     各阶段埋点 + request_id 透传 + 收尾
+  server.py                         /api/think/{id} + AskRequest.request_id
+  config.py                         LIVE_THINK_MAX_STEPS / LIVE_THINK_TTL_SECONDS
+  ui/app.js                         showThinking / pollThink / renderThink /
+                                    finishThink / thinkStepText + 中日词表
+  ui/index.html                     思考面板容器与打断按钮
+  ui/style.css                      .think / .think-line / .btn-stop 样式
+
+相关但属另一半功能（打断续跑）
+  memory/interrupt/                 中断日志模块（记忆层第六模块）
+  core/perception/context.py        resume 上下文块注入
+  ui/debug.html / debug.js / debug.css   调试后台「中断记录」面板
+
+================================================================================
+文档结束
+================================================================================

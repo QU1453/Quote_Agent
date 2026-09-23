@@ -30,6 +30,7 @@ from core.cognition.react import (  # ReAct 引擎提炼到认知层（思考推
 )
 from memory import get_memory, get_short_term, thread_id_for
 from memory.access import MemoryCaller
+from core.telemetry import current_cancelled, get_live_bus
 from tools import lookup_order, recommend_for
 
 # 兼容旧引用（如 agents/customer_service.py 的 from .base import is_japanese）
@@ -42,9 +43,18 @@ except Exception:  # pragma: no cover - 离线环境 / 未安装依赖时
     pass
 
 
+# 被打断时工具的占位返回前缀：上层据此识别「该工具是用户打断、并未执行」。
+# 必须返回一条**正常的工具消息**而不是抛错/跳过——assistant 的 tool_calls 必须有
+# 对应的 tool 结果，否则该 agent 线程的 checkpoint 会留下残破历史，下一轮调模型
+# 直接被接口以「tool_calls 缺后续 tool 消息」拒绝，整个专职智能体就废了。
+INTERRUPT_SKIP_PREFIX = "[已打断]"
+_INTERRUPT_SKIP_REPLY = INTERRUPT_SKIP_PREFIX + " 用户已打断本轮，该工具未执行。"
+
+
 def _guard_tool(fn):
     """约束层挂载：agent 直连工具统一过验证层（权限/路径/网络/危险 + hook）与循环守卫。
 
+    - 打断短路：本轮已被请求打断时**不执行**工具，直接返回占位结果（零副作用）；
     - 拦截：不执行原函数，把错误提示文本作为工具结果返回（随 ToolMessage 进入
       消息列表，agent 读到后可自行调整策略）；
     - 软干预：工具结果末尾追加 <system-reminder>（相同调用提醒 / [A,B]×3 交替提醒）；
@@ -58,6 +68,13 @@ def _guard_tool(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         from core.constraint.layer import get_constraint_layer
+
+        # 打断优先：已请求打断 → 工具不执行（不记账、不落副作用），只留占位工具消息
+        try:
+            if current_cancelled():
+                return _INTERRUPT_SKIP_REPLY
+        except Exception:  # noqa: BLE001 - 打断判定故障不阻断工具调用
+            pass
 
         try:
             bound = sig.bind(*args, **kwargs)
@@ -104,6 +121,23 @@ def _extract_telemetry(result: dict, prev_count: int, model: str) -> dict:
                                "args": c.get("args") or {}})
     return {"input_tokens": input_tokens, "output_tokens": output_tokens,
             "tool_calls": tool_calls, "model": model}
+
+
+def _args_summary(args: object, limit: int = 90) -> str:
+    """工具入参 → 一行摘要（思考小字展示用；只给数据不给措辞，措辞由前端本地化）。"""
+    if not isinstance(args, dict) or not args:
+        return ""
+    parts = []
+    for key, val in list(args.items())[:4]:
+        s = "" if val is None else str(val).replace("\n", " ")
+        parts.append(f"{key}={s[:40]}")
+    return "、".join(parts)[:limit]
+
+
+def _result_summary(content: object, limit: int = 90) -> str:
+    """工具返回 → 一行摘要（同上，截断防界面过长）。"""
+    s = "" if content is None else str(content).replace("\n", " ").strip()
+    return s[:limit]
 
 
 def build_memory_context(mm, uid: str, question: str,
@@ -178,17 +212,22 @@ class ReActAgentBase:
         return self._graph is not None
 
     def answer(self, question: str, session_id: str = "default",
-               extra_system: list[str] | None = None) -> dict | None:
+               extra_system: list[str] | None = None,
+               request_id: str = "") -> dict | None:
         """调用 LLM Agent，返回 {reply, intent, data}；失败返回 None（交由兜底）。
 
         多轮记忆：checkpointer 按 thread_id（= session_id）自动携带历史上下文，
         无需手动拼接 history。extra_system：编排层（orchestrator）注入的
         每轮动态上下文块（死规则/长期记忆/知识库索引/短窗口话题/热技能）。
+
+        流式驱动（stream_mode="updates"）：边跑边把「思考步骤」上报运行态总线，
+        供聊天框展示小字；同时在各检查点检查打断信号，实现协作式打断。
+        request_id：本轮运行态标识；留空 = 不展示思考过程、不支持打断（零开销）。
         """
         if not self.available:
             return None
         try:
-            config = {"configurable": {"thread_id": thread_id_for(session_id)}}
+            cfg = {"configurable": {"thread_id": thread_id_for(session_id)}}
             # 循环守卫会话归并：编排器未设置线程变量时（直调 agent）兜底为本次会话 ID
             try:
                 from core.constraint.layer import ensure_current_session
@@ -207,21 +246,22 @@ class ReActAgentBase:
                 + (extra_system or [])
                 + ([_JA_REPLY_HINT] if is_japanese(question) else [])
             )
-            # 记录本轮前的消息数：invoke 返回的是整条 thread 的全量消息，
-            # 卡片提取只看本轮新增部分，避免把旧轮工具调用误当卡片
-            state = self._graph.get_state(config)
-            prev_count = len(state.values.get("messages", [])) if (state and state.values) else 0
-            result = self._graph.invoke({"messages": [{"role": "user", "content": question}]}, config)
-            formatted = self._format_result(result, prev_count)
+            # 流式驱动：既拿到本轮全部新增消息，也顺路完成思考上报与打断检查
+            msgs, interrupt = self._stream_run(cfg, question, request_id)
+            result = {"messages": msgs}
+            formatted = self._format_result(result, 0)
             # 遥测提取：本轮新增消息里的 usage_metadata（真实 token）与 tool_calls
             # （ReAct 每步模型调用各有一条 AIMessage，逐条累加 = 本轮总消耗）
             try:
                 from core.telemetry import get_recorder
 
                 get_recorder()  # 触发单例初始化（fail-open，见 recorder）
-                formatted["_telemetry"] = _extract_telemetry(result, prev_count, self.model)
+                formatted["_telemetry"] = _extract_telemetry(result, 0, self.model)
             except Exception:  # noqa: BLE001 - 遥测故障不影响回复
                 pass
+            if interrupt:
+                # 打断标记：编排器据此落中断日志（memory/interrupt/）并停止兜底
+                formatted["_interrupt"] = interrupt
             try:
                 # 每轮推理后触发压缩检查：阈值内只多一次 get_state，零 LLM 开销；
                 # 超阈值时裁剪旧消息并把滚动摘要回流进线程，下一轮自动携带
@@ -231,6 +271,180 @@ class ReActAgentBase:
             return formatted
         except Exception:  # noqa: BLE001 - 网络/额度/格式异常都交给兜底
             return None
+
+    def _stream_run(self, cfg: dict, question: str,
+                    request_id: str = "") -> tuple[list, dict | None]:
+        """流式跑完 ReAct：逐步上报思考步骤 + 在检查点响应打断。
+
+        返回 `(本轮新增消息, 打断信息)`；打断信息为 None 表示正常跑完。
+
+        打断是**协作式**的（单次 LLM 请求发出后无法从外部掐断，这是物理限制）：
+        - 模型已决定调工具时命中打断 → `_guard_tool` 把工具短路成占位返回（真不执行、
+          零副作用），tools 节点照常产出 tool 消息，**消息历史保持完整**；
+        - 每个 chunk 收完才判定停止，绝不中途丢弃同一批消息——否则会留下
+          「有 tool_calls 却无 tool 结果」的残破 checkpoint，该 agent 线程下一轮
+          调模型会直接被接口拒绝（这是必须避开的真坑）。
+        """
+        bus = get_live_bus() if request_id else None
+        msgs: list = []
+        completed_tools: list[str] = []
+        skipped_tools: list[str] = []      # 被用户打断、未执行的工具
+        pending_tool = ""
+        step_no = 0
+
+        # 自愈：上一轮可能留下「有 tool_calls 却无 tool 结果」的残缺尾巴
+        # （打断、进程被强杀导致最后一次写入丢失等都可能造成）。这种尾巴会让模型接口
+        # 直接拒绝整条历史，该专职智能体从此静默不可用（表现为悄悄退化到客服智能体），
+        # 所以每轮开跑前先补齐占位工具结果。
+        self._heal_dangling_tool_calls(cfg)
+
+        if bus is not None:
+            bus.add(request_id, "llm", "think", detail="0")
+            # 检查点⓪：还没开跑就已被打断 → 连模型都不调用（零成本停止）
+            if bus.is_cancelled(request_id):
+                return msgs, self._interrupt_info(
+                    "perception", 0, [], "", False, msgs, bus.cancel_reason(request_id))
+
+        gen = self._graph.stream(
+            {"messages": [{"role": "user", "content": question}]},
+            cfg, stream_mode="updates",
+        )
+        interrupt: dict | None = None
+        try:
+            for chunk in gen:
+                for payload in (chunk or {}).values():
+                    for m in (payload or {}).get("messages") or []:
+                        msgs.append(m)
+                        calls = getattr(m, "tool_calls", None) or []
+                        if calls:
+                            step_no += 1
+                            if bus is not None:
+                                bus.add(request_id, "llm", "think", detail=str(step_no))
+                            for call in calls:
+                                name = str(call.get("name") or "")
+                                pending_tool = name
+                                if bus is not None:
+                                    bus.add(request_id, "tool", name,
+                                            detail=_args_summary(call.get("args")),
+                                            status="pending")
+                        elif getattr(m, "type", "") == "tool":
+                            name = str(getattr(m, "name", "") or pending_tool)
+                            content = str(getattr(m, "content", "") or "")
+                            status = str(getattr(m, "status", "success") or "").lower()
+                            ok = not status.startswith("error")
+                            if content.startswith(INTERRUPT_SKIP_PREFIX):
+                                # 用户打断：工具未执行（既不算成功，也不算失败）
+                                if name:
+                                    skipped_tools.append(name)
+                                if bus is not None:
+                                    bus.add(request_id, "tool", name or pending_tool,
+                                            detail="", status="skipped")
+                            elif ok:
+                                if name:
+                                    completed_tools.append(name)
+                                if bus is not None:
+                                    bus.add(request_id, "tool", name or pending_tool,
+                                            detail=_result_summary(content), status="ok")
+                            elif bus is not None:
+                                bus.add(request_id, "tool", name or pending_tool,
+                                        detail=_result_summary(content), status="error")
+                            if name and name == pending_tool:
+                                pending_tool = ""
+
+                # 一个 chunk 收完才判定停止（同一批消息必须全部进 msgs）
+                if bus is None or not bus.is_cancelled(request_id):
+                    continue
+                if pending_tool and not skipped_tools:
+                    # 检查点①命中：模型刚决定调工具。这里**不能** break——
+                    # 要让 tools 节点把工具短路成占位返回，历史才完整；
+                    # 循环会在 tools 那个 chunk 之后停住。
+                    continue
+                if pending_tool or completed_tools or skipped_tools:
+                    # 检查点②：工具已返回（或已短路），不再推进下一步推理
+                    stop_tool = skipped_tools[0] if skipped_tools else pending_tool
+                    interrupt = self._interrupt_info(
+                        "tool" if stop_tool else "thinking", step_no, completed_tools,
+                        stop_tool, bool(skipped_tools), msgs,
+                        bus.cancel_reason(request_id))
+                    break
+        finally:
+            # 显式关闭生成器：break/return 跳出后立刻停止图执行，不等 GC
+            close = getattr(gen, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:  # noqa: BLE001
+                    pass
+        return msgs, interrupt
+
+    def _heal_dangling_tool_calls(self, cfg: dict) -> None:
+        """修补残缺历史：清掉「有 tool_calls 却没有任何 tool 结果」的 AI 消息。
+
+        为什么必须有这一手：OpenAI 兼容接口要求 assistant 的每个 tool_call 都有对应的
+        tool 消息，否则整条历史被拒 → 该专职智能体每轮都失败。上层只看到它"不可用"，
+        会静默退化到客服智能体，用户完全无从察觉（表现为"选品智能体好像失灵了"）。
+
+        产生原因：打断、进程被强杀导致最后一次 checkpoint 写入丢失等。
+        注意不能只看最后一条：失败轮次会继续往历史里追加用户消息，残缺的 AI 消息
+        会沉到中间，所以这里全量扫描。
+
+        失败一律静默放过（最坏情况退回改造前行为，不影响本轮）。
+        """
+        try:
+            state = self._graph.get_state(cfg)
+            msgs = list((state.values or {}).get("messages") or []) if (state and state.values) else []
+            if not msgs:
+                return
+            from langchain_core.messages import RemoveMessage
+
+            answered = {str(getattr(m, "tool_call_id", "")) for m in msgs
+                        if getattr(m, "tool_call_id", "")}
+            doomed: list[str] = []
+            orphan_ids: set[str] = set()
+            for m in msgs:
+                calls = getattr(m, "tool_calls", None) or []
+                if not calls:
+                    continue
+                pending = [c for c in calls if str(c.get("id") or "") not in answered]
+                mid = str(getattr(m, "id", "") or "")
+                if pending and mid:
+                    doomed.append(mid)
+                    orphan_ids.update(str(c.get("id") or "") for c in calls)
+            if not doomed:
+                return
+            # 顺带清掉指向被删 AI 消息的孤儿 tool 结果，避免留下无主的工具消息
+            for m in msgs:
+                mid = str(getattr(m, "id", "") or "")
+                if mid and str(getattr(m, "tool_call_id", "") or "") in orphan_ids:
+                    doomed.append(mid)
+            self._graph.update_state(
+                cfg, {"messages": [RemoveMessage(id=i) for i in dict.fromkeys(doomed)]})
+        except Exception:  # noqa: BLE001 - 自愈失败不阻断本轮
+            pass
+
+    @staticmethod
+    def _interrupt_info(stage: str, step_index: int, completed_tools: list[str],
+                        pending_tool: str, tool_interrupted_by_user: bool,
+                        msgs: list, reason: str) -> dict:
+        """汇总打断现场：停在哪一步 / 已完成与被打断的工具 / 已产出的部分内容。"""
+        partial = ""
+        for m in reversed(msgs):
+            if getattr(m, "type", "") in ("tool", "human"):
+                continue
+            content = str(getattr(m, "content", "") or "").strip()
+            if content:
+                partial = content[:400]
+                break
+        return {
+            "stage": stage,                                   # tool / thinking
+            "step_index": int(step_index),
+            "completed_tools": list(completed_tools),
+            "pending_tool": pending_tool,
+            "tool_interrupted_by_user": bool(tool_interrupted_by_user),
+            "partial_reply": partial,
+            "interrupted_by": "user",
+            "reason": str(reason or "user"),
+        }
 
     def _dynamic_prompt(self, state):
         """动态 prompt：固定系统提示 + 每轮最新动态上下文 + 历史消息。

@@ -120,4 +120,72 @@ def compare_supplier(product_keyword: str) -> str:
     }, ensure_ascii=False)
 
 
-__all__ = ["search_supplier", "compare_supplier", "registry", "SUPPLIER_SOURCE"]
+# ---- 供应商工商风险演示数据：真实版接企查查/天眼查/裁判文书网 API --------------------
+_RISK_NOTES = {
+    "深圳锂能电子": {"legal": "正常", "lawsuits": 0, "penalties": 0, "note": "近 12 个月无涉诉/处罚记录"},
+    "东莞宏锐能源": {"legal": "正常", "lawsuits": 1, "penalties": 0, "note": "1 起买卖合同纠纷（已和解）"},
+    "义乌小商品城·联航": {"legal": "正常", "lawsuits": 0, "penalties": 1, "note": "1 次消防整改（已完成）"},
+    "深圳声学智造": {"legal": "正常", "lawsuits": 0, "penalties": 0, "note": "国家级高新企业，经营稳定"},
+    "东莞音频电子": {"legal": "正常", "lawsuits": 2, "penalties": 0, "note": "2 起劳动争议（已结案）"},
+    "义乌数码港·鑫声": {"legal": "异常", "lawsuits": 0, "penalties": 0, "note": "注册地址异常（列入经营异常名录）"},
+    "永康保温科技": {"legal": "正常", "lawsuits": 0, "penalties": 0, "note": "近 12 个月无涉诉/处罚记录"},
+    "义乌杯业工贸": {"legal": "正常", "lawsuits": 1, "penalties": 0, "note": "1 起质量纠纷（调解结案）"},
+    "潮州瓷器集团·杯具部": {"legal": "正常", "lawsuits": 0, "penalties": 0, "note": "集团子公司，资信良好"},
+}
+
+
+@registry.register(
+    name="check_supplier_risk",
+    description=(
+        "何时使用：下单前的供应商风险背调——经营状态/涉诉/行政处罚/资质评级一次查清。"
+        "用户问“这家供应商靠谱吗/有没有风险/要不要换一家”时调用。\n"
+        '调用格式：{"tool": "check_supplier_risk", "parameters": {"supplier_name": "<供应商名称，字符串类型>"}}\n'
+        "参数说明：\n"
+        "- supplier_name：供应商名称（支持部分匹配），字符串类型（string），如\"深圳锂能电子\"；"
+        "也可先 search_supplier 拿到候选名单再逐家核查。"
+    ),
+    schema={"supplier_name": "string 供应商名称"},
+    level="L0",
+    cost="low",
+)
+def check_supplier_risk(supplier_name: str) -> str:
+    """供应商风险背调：经营状态 / 涉诉 / 处罚 / 评级建议。"""
+    name = str(supplier_name or "").strip()
+    hit = None
+    for items in _SUPPLIERS.values():
+        for s in items:
+            if s["name"] in name or name in s["name"]:
+                hit = s
+                break
+        if hit:
+            break
+    if hit is None:
+        return json.dumps({"found": False,
+                           "hint": "演示库无此供应商；可先用 search_supplier 查询候选名单再核查"},
+                          ensure_ascii=False)
+    ext = _RISK_NOTES.get(hit["name"],
+                          {"legal": "未知", "lawsuits": 0, "penalties": 0, "note": "演示库暂无工商风险数据"})
+    if ext["legal"] != "正常" or hit["rating"] < 4.5 or ext["lawsuits"] >= 2:
+        level, advice = "高", "建议换备选供应商，或实地验厂后再谈"
+    elif ext["lawsuits"] >= 1 or ext["penalties"] >= 1 or hit["rating"] < 4.7:
+        level, advice = "中", "可合作，但首单建议小额试单并签质量协议"
+    else:
+        level, advice = "低", "可正常推进；仍需索要样品与认证原件"
+    return json.dumps({
+        "found": True,
+        "supplier": hit["name"],
+        "city": hit["city"],
+        "rating": hit["rating"],
+        "cert": hit["cert"],
+        "legal_status": ext["legal"],
+        "lawsuits": ext["lawsuits"],
+        "penalties": ext["penalties"],
+        "risk_level": level,
+        "note": ext["note"],
+        "advice": advice,
+        "source": SUPPLIER_SOURCE,
+    }, ensure_ascii=False)
+
+
+__all__ = ["search_supplier", "compare_supplier", "check_supplier_risk",
+           "registry", "SUPPLIER_SOURCE"]

@@ -30,8 +30,11 @@
 
 一键演示：python -m memory.demo
 """
+from __future__ import annotations
+
 import os
-from pathlib import Path
+
+import config
 
 # ---- 长期记忆为可选依赖：hnswlib 在 Windows 无预编译包，装不上时降级为"仅短期记忆" ----
 # 短期记忆（SqliteSaver + 压缩）不依赖 hnswlib，agents/ 的核心链路不受影响；
@@ -111,8 +114,9 @@ def get_short_term(llm=None):
         from .short_term.compress import Compressor
         from .short_term.memory import ShortTermMemory
 
+        # 数据目录走 config.DATA_DIR（不能用 __file__：打包后会落到解包临时目录，重启即丢）
         _compat_stm = ShortTermMemory(
-            Path(__file__).resolve().parent / "short_term" / "data" / "short_term.sqlite",
+            config.DATA_DIR / "memory" / "short_term" / "short_term.sqlite",
             compressor=Compressor(llm=llm or _env_llm()),
         )
     return _compat_stm

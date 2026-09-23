@@ -15,7 +15,7 @@ import threading
 from pathlib import Path
 
 from ..access import AccessError, MemoryCaller, SYSTEM_CALLER, guard
-from .ann import AnnIndex, cosine
+from .ann import AnnIndex, HNSWLIB_AVAILABLE, cosine
 from .chunker import chunk_text
 from .rag import EmbeddingCache, EmbeddingProvider, pick_provider, text_hash
 
@@ -130,13 +130,23 @@ class LongTermMemory:
 
     def _load_ann(self) -> AnnIndex | None:
         """重启恢复：索引文件与维度元数据齐备则从磁盘加载 .hnsw，否则视为空索引。"""
+        if not HNSWLIB_AVAILABLE:
+            return None
         dim = self._stored_dim()
         if self.ann_path.exists() and dim:
-            return AnnIndex.load(self.ann_path, dim, ef_search=self._efs, overfetch=self._ovf)
+            try:
+                return AnnIndex.load(self.ann_path, dim, ef_search=self._efs, overfetch=self._ovf)
+            except Exception:  # noqa: BLE001 - 索引损坏/不可读时退化为无索引，不影响其余记忆功能
+                return None
         return None
 
-    def _ensure_ann(self, dim: int) -> AnnIndex:
-        """按需建索引；维度与既有索引不一致直接报错（换 Provider 需先清库）。"""
+    def _ensure_ann(self, dim: int) -> AnnIndex | None:
+        """按需建索引；无 hnswlib 时返回 None（调用方走暴力检索降级）。
+
+        维度与既有索引不一致直接报错（换 Provider 需先清库）。
+        """
+        if not HNSWLIB_AVAILABLE:
+            return None
         stored = self._stored_dim()
         if stored is not None and stored != dim:
             raise ValueError(f"嵌入维度不一致：既有索引 {stored}，当前 Provider {dim}。请清空长期库或更换 Provider。")
@@ -271,17 +281,24 @@ class LongTermMemory:
                 )
                 labels.append(c.lastrowid)
             self._label_user.update({lb: str(user_id) for lb in labels})
-            ann.add(labels, vecs)
+            if ann is not None:          # 无 hnswlib 时不建图索引：chunks 已落库，检索走暴力精确路径
+                ann.add(labels, vecs)
             self._conn.commit()
-            if self.auto_save:
+            if ann is not None and self.auto_save:
                 ann.save(self.ann_path)
         return {"doc_id": doc_id, "chunks": len(pieces)}
 
     # ---------- RAG 检索：ANN 速度优先 + 精确重排 ----------
     def recall(self, user_id: str, query: str, top_k: int = 5, with_rerank: bool = True) -> list[dict]:
-        """语义召回：查询向量化 → ANN 粗排（仅本用户分区）→ 精确 cosine 重排 → top-k 块。"""
+        """语义召回：查询向量化 → ANN 粗排（仅本用户分区）→ 精确 cosine 重排 → top-k 块。
+
+        无 hnswlib（图索引不可用）时退回暴力精确检索，功能不缺失、只是慢；
+        该用户没有入库任何文档时直接返回空，保持"空库零开销"。
+        """
         if self._ann is None or len(self._ann) == 0:
-            return []
+            has_chunks = self._conn.execute(
+                "SELECT 1 FROM chunks WHERE user_id=? LIMIT 1", (str(user_id),)).fetchone()
+            return self.brute_force_recall(user_id, query, top_k=top_k) if has_chunks else []
         uid = str(user_id)
         qvec = self.cache.embed([query.strip()])[0]
         ann = self._ann

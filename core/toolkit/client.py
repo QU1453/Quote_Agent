@@ -165,7 +165,7 @@ class MCPClient:
 
     def __init__(self, transport: Transport, *, max_retries: int | None = None,
                  protocol_version: str | None = None,
-                 client_name: str = "sellpilot-agent", client_version: str = "1.0.0"):
+                 client_name: str = "quote-agent", client_version: str = "1.0.0"):
         self._transport = transport
         self.max_attempts = max(1, int(max_retries if max_retries is not None
                                       else config.TOOL_CALL_MAX_RETRIES))

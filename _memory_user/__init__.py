@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""SellPilot Agent 记忆模块（Memory）：短期 + 长期 + ANN-RAG + 记忆压缩。
+"""Quote Agent 记忆模块（Memory）：短期 + 长期 + ANN-RAG + 记忆压缩。
 
 独立模块，可整体搬移。快速上手：
 

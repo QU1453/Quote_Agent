@@ -16,7 +16,7 @@ from .base import ReActAgentBase, card_items, is_japanese
 from tools import recommend_for, recommend_products
 
 # 售前导购智能体的系统提示词：主管买前咨询与商品推荐
-SYSTEM_PROMPT = """你是「SellPilot」跨境电商售前导购 Agent，面向海外（日本）消费者、当前以中文演示。
+SYSTEM_PROMPT = """你是「Quote Agent」跨境电商售前导购 Agent，面向海外（日本）消费者、当前以中文演示。
 
 工作方式：根据用户需求，调用 recommend_products 工具获取候选商品，再结合商品特点作答：
 - 用户描述需求/场景（如"通勤听歌""送礼""续航久"）→ 提炼关键词调用工具；
@@ -87,12 +87,12 @@ def classic_presales_reply(q: str) -> dict:
     if re.search(r"在吗|你好|哈喽|hi|hello|こんにちは", s):
         if ja:
             return {
-                "reply": "こんにちは～SellPilot のプリセールス（ご案内担当）でございます。ご予算やご要望をお聞かせいただければ、最適な商品をご提案いたします～",
+                "reply": "こんにちは～Quote Agent のプリセールス（ご案内担当）でございます。ご予算やご要望をお聞かせいただければ、最適な商品をご提案いたします～",
                 "intent": "none",
                 "data": None,
             }
         return {
-            "reply": "您好呀～我是 SellPilot 的售前导购，想买什么告诉我需求或预算，帮您挑最合适的～",
+            "reply": "您好呀～我是 Quote Agent 的售前导购，想买什么告诉我需求或预算，帮您挑最合适的～",
             "intent": "none",
             "data": None,
         }

@@ -1,27 +1,36 @@
 # -*- coding: utf-8 -*-
-"""一键打包 SellPilot 单文件可执行程序。
+"""一键打包 Quote 单文件可执行程序。
 
 用法：
     python -m pip install -r requirements.txt pyinstaller
     python build.py
 
 产物（在当前平台构建，PyInstaller 不支持交叉编译）：
-    Windows  dist/SellPilot.exe
-    macOS    dist/SellPilot
-    Linux    dist/SellPilot
+    Windows  dist/Quote.exe
+    macOS    dist/Quote
+    Linux    dist/Quote
 
 打包后仍是同一个应用：双击即启动内嵌服务并打开原生窗口，
 设置面板里保存的密钥 / 模型 / 预算会写到可执行文件旁边的 .env。
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-SPEC = ROOT / "SellPilot.spec"
+SPEC = ROOT / "Quote.spec"
+
+# PyInstaller 默认把缓存/解包临时文件写到 %LOCALAPPDATA%\pyinstaller；
+# 项目铁律禁止读写 C 盘，这里统一重定向到项目内 .tmp\（已被 .gitignore 拦截）。
+_TMP = ROOT / ".tmp"
+(_TMP / "temp").mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("PYINSTALLER_CONFIG_DIR", str(_TMP / "pyinstaller"))
+os.environ.setdefault("TEMP", str(_TMP / "temp"))
+os.environ.setdefault("TMP", str(_TMP / "temp"))
 
 
 def _human(size: int) -> str:
@@ -48,7 +57,7 @@ def main() -> int:
         print("排查建议：先结束所有残留进程，再执行 python build.py --clean 重试。")
         return result.returncode
 
-    artifact = ROOT / "dist" / ("SellPilot.exe" if sys.platform.startswith("win") else "SellPilot")
+    artifact = ROOT / "dist" / ("Quote.exe" if sys.platform.startswith("win") else "Quote")
     if not artifact.exists():
         print(f"\n构建完成但未找到产物：{artifact}")
         return 1

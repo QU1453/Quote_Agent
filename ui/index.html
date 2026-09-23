@@ -4,29 +4,40 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="color-scheme" content="light">
-<meta name="theme-color" content="#f6f4f0">
-<title>SellPilot · 跨境选品与上架工作台</title>
+<meta name="theme-color" content="#edf0f1">
+<title>Quote Agent · 跨境选品与上架工作台</title>
+<!-- 关键背景色内联：从加载页切到主界面的那一帧，style.css 可能还没应用，
+     先把底色刷成同一片雾白，避免"白屏闪一下"（也顺带盖住首帧样式未就位的重排）。 -->
+<style>html{background:#e9edee}</style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Jost:wght@300;400;500&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400&family=Noto+Sans+SC:wght@300;400;500&family=Noto+Serif+SC:wght@400&display=swap" rel="stylesheet">
+<!-- 字体表是**外网**资源：若用普通 rel=stylesheet 会阻塞首屏渲染，桌面包每次冷启动又是全新
+     缓存目录（pywebview 临时 profile），一旦 fonts.googleapis.com 慢或不可达，主界面就会
+     一直白屏。改成 media="print" + onload 切换：先用本机字体立刻画出界面，字体到了再换上。 -->
+<link rel="stylesheet" media="print" onload="this.media='all'"
+      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Instrument+Sans:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Noto+Sans+JP:wght@300;400;500&family=Noto+Sans+SC:wght@300;400;500&family=Noto+Serif+JP:wght@400&family=Noto+Serif+SC:wght@400&display=swap">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
-<!-- 日光层：晨光 / 织纹 / 掠光，纯装饰 -->
+<!-- 氛围层：极光晕 / 经纬织纹 / 颗粒 / 掠光，纯装饰 -->
 <div class="atmos" aria-hidden="true">
-  <span class="atmos-glow"></span>
-  <span class="atmos-grid"></span>
-  <span class="atmos-scan"></span>
+  <span class="atmos-aurora"></span>
+  <span class="atmos-weave"></span>
+  <span class="atmos-grain"></span>
+  <span class="atmos-sheen"></span>
 </div>
 
 <header class="topbar">
   <button class="brand" id="brandBtn" type="button">
     <span class="brand-mark" aria-hidden="true">
-      <svg viewBox="0 0 32 32"><path d="M3 21.5 12 5.5l3.8 7.6L19 8l10 13.5z"/><path d="M3 26h26"/></svg>
+      <svg viewBox="0 0 32 32">
+        <path d="M16 4.5 26.5 12 22.8 25.5H9.2L5.5 12z"/>
+        <path d="M16 4.5 16 25.5M5.5 12h21M11 12l5 13.5L21 12"/>
+      </svg>
     </span>
     <span class="brand-text">
-      <b>SellPilot</b>
+      <b>Quote</b>
       <i data-i18n="brandSub">跨境选品 · 上架工作台</i>
     </span>
   </button>
@@ -41,7 +52,7 @@
       <svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z"/><path d="M19.4 13a7.7 7.7 0 0 0 0-2l2-1.5-2-3.4-2.3 1a7.6 7.6 0 0 0-1.7-1L15 3.6h-4l-.4 2.5c-.6.2-1.2.6-1.7 1l-2.3-1-2 3.4L6.6 11a7.7 7.7 0 0 0 0 2l-2 1.5 2 3.4 2.3-1c.5.4 1.1.8 1.7 1l.4 2.5h4l.4-2.5c.6-.2 1.2-.6 1.7-1l2.3 1 2-3.4z"/></svg>
       <span data-i18n="settings">设置</span>
     </button>
-    <a class="tool-btn is-ghost" href="/debug" target="_blank" data-i18n="debug">调试后台</a>
+    <button class="tool-btn is-ghost" id="debugBtn" type="button" data-i18n="debug">调试后台</button>
     <div class="lang-switch" role="group" aria-label="语言 / 言語">
       <button id="langZH" class="lang-btn" type="button" aria-pressed="true">中</button>
       <button id="langJA" class="lang-btn" type="button" aria-pressed="false">日</button>
@@ -49,50 +60,168 @@
   </div>
 </header>
 
+<div class="shell">
+
+  <!-- ========== 左栏：顶部「总控台」独立入口 + 项目列（用户创建的项目） ========== -->
+  <aside class="rail" id="rail">
+    <button class="rail-l1" id="railHome" type="button" aria-current="page">
+      <span class="rail-mark" aria-hidden="true">
+        <svg viewBox="0 0 12 12"><path d="M6 1l5 5-5 5-5-5z"/></svg>
+      </span>
+      <span class="rail-l1name" data-i18n="railHome">总控台</span>
+    </button>
+
+    <div class="rail-l2">
+      <div class="rail-l2head">
+        <span class="rail-l2title" data-i18n="railProjects">项目</span>
+      </div>
+      <!-- 左栏只留**一个**创建入口（下面这个整行按钮）。
+           头部原先还有个数徽标 + 一个 ＋：徽标会和项目名混读（有用户的项目就叫「3」，
+           渲染成「项目 3 ＋」像是"名为 3 的项目 + 新建"），＋ 又与整行按钮完全重复 → 都去掉。 -->
+
+      <div class="rail-body" id="railBody">
+        <button class="rail-new" id="railNew" type="button">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2.2v7.6M2.2 6h7.6"/></svg>
+          <span data-i18n="railNewProject">新建项目</span>
+        </button>
+        <input class="rail-search" id="railSearch" type="search" autocomplete="off"
+               data-i18n-ph="railSearchPh" placeholder="搜索项目…">
+        <ul class="rail-list" id="railList"></ul>
+      </div>
+
+      <p class="rail-hint" id="railHint" data-i18n="railHint">选一个项目进入；不同项目的上下文互相隔离。</p>
+    </div>
+  </aside>
+
 <main id="app">
 
-  <!-- ========== 总览：两条产线 ========== -->
-  <section class="view is-active" id="view-home">
+  <!-- ========== 总控台：不挂项目的全局首页（全局对话 / 项目卡片 / 待办汇总 / 记忆与规则） ========== -->
+  <section class="view is-active" id="view-console">
     <div class="hero">
+      <span class="hero-rule" aria-hidden="true"></span>
       <p class="hero-kicker" data-i18n="heroKicker">OPERATIONS · SELECT → LIST</p>
       <h1 class="hero-title" data-i18n="heroTitle">两条产线，一次跑通</h1>
-      <p class="hero-lead" data-i18n="heroLead">选品解决「卖什么」，Listing 解决「怎么卖」。挑一个模块进入，或在模块里直接自由对话。</p>
+      <p class="hero-lead" data-i18n="heroLead">选品解决「卖什么」，Listing 解决「怎么卖」。先选一个项目进入，再挑模块 —— 不同项目的上下文互相隔离。</p>
+      <div class="hero-marks" aria-hidden="true">
+        <span><b>01</b>SELECT</span><i></i><span><b>02</b>LIST</span><i></i><span><b>11</b>MODULES</span>
+      </div>
     </div>
 
-    <div class="boards">
-      <article class="board" data-board="research">
-        <header class="board-head">
-          <span class="board-no">01</span>
-          <div class="board-meta">
-            <h2 data-i18n="boardResearch">选品</h2>
-            <p data-i18n="boardResearchDesc">需求 · 竞争 · 利润 · 货源，四步筛出能赚钱的品。</p>
+    <div class="deck">
+      <!-- ① 全局对话：不挂任何项目（只注入 L0），是「换话题不污染上下文」的落点 -->
+      <section class="deck-card is-wide is-talk">
+        <header class="deck-head">
+          <span class="deck-no">01</span>
+          <div class="deck-meta">
+            <h2 data-i18n="deckTalk">全局对话</h2>
+            <p data-i18n="deckTalkDesc">不挂任何项目的通用问答，只带全局记忆，换话题最干净。</p>
           </div>
-          <span class="board-tag">SELECT</span>
+          <span class="deck-tag">L0</span>
         </header>
-        <div class="mod-grid"></div>
-      </article>
+        <div class="deck-msgs" id="msgs-console"></div>
+        <div class="composer">
+          <textarea id="inputCon" rows="1" data-i18n-ph="deckTalkPh"
+                    placeholder="说点什么…（Enter 发送 / Shift+Enter 换行）"></textarea>
+          <button class="btn-stop" id="stopBtnCon" type="button" data-i18n="stop" hidden>打断</button>
+          <button class="btn-send" id="sendBtnCon" type="button" aria-label="发送">
+            <svg viewBox="0 0 24 24"><path d="M4 11.6 20.5 4 13 20.5l-2.1-6.4z"/></svg>
+          </button>
+        </div>
+        <p class="hint" id="hintCon" data-i18n="hint">AI 多智能体 · 选品 + 上架</p>
+      </section>
 
-      <article class="board" data-board="listing">
-        <header class="board-head">
-          <span class="board-no">02</span>
-          <div class="board-meta">
-            <h2 data-i18n="boardListing">Listing</h2>
-            <p data-i18n="boardListingDesc">文案 · 图片 · 定价 · 履约，把品推上货架。</p>
+      <!-- ② 项目卡片：点一张进项目总览 -->
+      <section class="deck-card">
+        <header class="deck-head">
+          <span class="deck-no">02</span>
+          <div class="deck-meta">
+            <h2 data-i18n="deckProjects">项目</h2>
+            <p data-i18n="deckProjectsDesc">每个项目一套独立的选品 / Listing 上下文。</p>
           </div>
-          <span class="board-tag">LIST</span>
+          <button class="mini-btn" id="deckNewProject" type="button" data-i18n="railNewProject">新建项目</button>
         </header>
-        <div class="mod-grid"></div>
-      </article>
+        <ul class="deck-list" id="deckProjects"></ul>
+      </section>
+
+      <!-- ③ 待办汇总：跨项目的未完成断点，点一条直接跳回去 -->
+      <section class="deck-card">
+        <header class="deck-head">
+          <span class="deck-no">03</span>
+          <div class="deck-meta">
+            <h2 data-i18n="deckTodos">待办汇总</h2>
+            <p data-i18n="deckTodosDesc">被你打断的任务，点一条接着做。</p>
+          </div>
+          <span class="deck-tag" id="deckTodoCount">0</span>
+        </header>
+        <ul class="deck-list" id="deckTodos"></ul>
+      </section>
+
+      <!-- ④ 记忆与规则：只读预览 L0 全局层 -->
+      <section class="deck-card is-wide">
+        <header class="deck-head">
+          <span class="deck-no">04</span>
+          <div class="deck-meta">
+            <h2 data-i18n="deckMemory">记忆与规则</h2>
+            <p data-i18n="deckMemoryDesc">L0 全局层只读预览；项目 / 板块两层随项目隔离。</p>
+          </div>
+          <span class="deck-tag">L0 · RO</span>
+        </header>
+        <div class="deck-mem" id="deckMemory"></div>
+      </section>
     </div>
   </section>
 
-  <!-- ========== 模块控制台：左表单 + 右对话流 ========== -->
+  <!-- ========== 项目总览：选品 / Listing 两块平级区块，板块直接点进对话窗口 ========== -->
+  <section class="view" id="view-project">
+    <div class="project">
+      <header class="project-head">
+        <span class="project-no" id="projNo">01</span>
+        <div class="project-meta">
+          <h2 id="projTitle">—</h2>
+          <p id="projDesc">—</p>
+        </div>
+        <!-- 项目里也要能直接新建下一个项目（不用先回总控台） -->
+        <button class="project-new" id="projNew" type="button">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M6 2.2v7.6M2.2 6h7.6"/></svg>
+          <span data-i18n="railNewProject">新建项目</span>
+        </button>
+      </header>
+
+      <div class="boards">
+        <article class="board" id="board-research" data-board="research">
+          <header class="board-head">
+            <span class="board-no">01</span>
+            <div class="board-meta">
+              <h2 data-i18n="boardResearch">选品</h2>
+              <p data-i18n="boardResearchDesc">需求 · 竞争 · 利润 · 货源，四步筛出能赚钱的品。</p>
+            </div>
+            <span class="board-tag">SELECT</span>
+          </header>
+          <div class="mod-grid" id="grid-research"></div>
+        </article>
+
+        <article class="board" id="board-listing" data-board="listing">
+          <header class="board-head">
+            <span class="board-no">02</span>
+            <div class="board-meta">
+              <h2 data-i18n="boardListing">Listing</h2>
+              <p data-i18n="boardListingDesc">文案 · 图片 · 定价 · 履约，把品推上货架。</p>
+            </div>
+            <span class="board-tag">LIST</span>
+          </header>
+          <div class="mod-grid" id="grid-listing"></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ========== 板块对话窗口：左表单 + 右对话流（顶部会话切换条） ========== -->
   <section class="view" id="view-module">
     <div class="console">
       <aside class="console-form">
         <div class="form-top">
           <button class="back-btn" id="backBtn" type="button">
-            <svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg><span data-i18n="back">返回总览</span>
+            <svg viewBox="0 0 24 24"><path d="M15 5 8 12l7 7"/></svg><span data-i18n="back">返回项目</span>
           </button>
           <span class="mod-badge" id="modBadge">1.1</span>
         </div>
@@ -110,11 +239,26 @@
           </div>
         </header>
 
-        <div class="msgs is-active" id="msgs-research"></div>
-        <div class="msgs" id="msgs-listing"></div>
+        <!-- 会话切换条：会话挂在板块之下，不是独立一级（「只有二级」的交互体现） -->
+        <div class="talks" id="talks">
+          <button class="talks-cur" id="talksCur" type="button" aria-expanded="false">
+            <i class="talks-dot" aria-hidden="true"></i>
+            <span class="talks-name" id="talksName">—</span>
+            <span class="talks-count" id="talksCount">0</span>
+            <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+          </button>
+          <button class="mini-btn" id="talksNew" type="button" data-i18n="railNew">新对话</button>
+
+          <div class="talks-menu" id="talksMenu" hidden>
+            <ul class="talks-list" id="talksList"></ul>
+          </div>
+        </div>
+
+        <div class="msgs is-active" id="msgs-main"></div>
 
         <div class="composer">
           <textarea id="input" rows="1" data-i18n-ph="placeholder" placeholder="直接说需求…（Enter 发送 / Shift+Enter 换行）"></textarea>
+          <button class="btn-stop" id="stopBtn" type="button" data-i18n="stop" hidden>打断</button>
           <button class="btn-send" id="sendBtn" type="button" aria-label="发送">
             <svg viewBox="0 0 24 24"><path d="M4 11.6 20.5 4 13 20.5l-2.1-6.4z"/></svg>
           </button>
@@ -124,6 +268,52 @@
     </div>
   </section>
 </main>
+</div><!-- /shell -->
+
+<!-- ========== 悬浮指导智能体（只读：可读全部记忆，不写任何东西） ========== -->
+<div class="guide" id="guide" data-open="false">
+  <button class="guide-ball" id="guideBall" type="button" aria-expanded="false" aria-label="指导智能体">
+    <span class="guide-ball-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15.6 8.4 13 14.9 8.4 15.6 11 9.1z"/></svg>
+    </span>
+    <i class="guide-ping" aria-hidden="true"></i>
+  </button>
+
+  <section class="guide-panel" id="guidePanel" hidden aria-label="指导智能体">
+    <header class="guide-head">
+      <span class="guide-title" data-i18n="guideTitle">指导智能体</span>
+      <span class="guide-badge" data-i18n="guideRO">只读</span>
+      <button class="guide-close" id="guideClose" type="button" aria-label="关闭">✕</button>
+    </header>
+    <div class="guide-msgs" id="guideMsgs"></div>
+    <div class="guide-composer">
+      <input id="guideInput" type="text" autocomplete="off"
+             data-i18n-ph="guidePh" placeholder="问：我该去哪儿？">
+      <button class="guide-send" id="guideSend" type="button" aria-label="发送">
+        <svg viewBox="0 0 24 24"><path d="M4 11.6 20.5 4 13 20.5l-2.1-6.4z"/></svg>
+      </button>
+    </div>
+  </section>
+</div>
+
+<!-- ========== 调试后台（弹窗形式，不跳浏览器标签页） ========== -->
+<div class="dock" id="debugDock" aria-hidden="true">
+  <div class="dock-backdrop" data-debug-close></div>
+  <section class="dock-panel" role="dialog" aria-modal="true" aria-labelledby="dockTitle">
+    <header class="dock-head">
+      <div class="dock-headline">
+        <p class="dock-kicker" data-i18n="debugKicker">TELEMETRY / TRACE</p>
+        <h2 id="dockTitle" data-i18n="debugTitle">调试后台</h2>
+      </div>
+      <div class="dock-tools">
+        <button class="mini-btn" id="debugReload" type="button" data-i18n="debugRefresh">刷新</button>
+        <button class="mini-btn" id="debugBrowser" type="button" data-i18n="debugBrowser">在浏览器打开</button>
+        <button class="modal-close" id="debugClose" type="button" aria-label="关闭">✕</button>
+      </div>
+    </header>
+    <div class="dock-body" id="debugBody"></div>
+  </section>
+</div>
 
 <!-- ========== 设置弹窗 ========== -->
 <div class="modal" id="settingsModal" aria-hidden="true">
@@ -196,6 +386,73 @@
     <footer class="modal-foot">
       <button class="btn is-ghost" id="setTest" type="button" data-i18n="setTest">测试连接</button>
       <button class="btn is-primary" id="setSave" type="button" data-i18n="setSave">保存并应用</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ========== 项目弹窗（新建 / 重命名） ========== -->
+<div class="modal" id="projectModal" aria-hidden="true">
+  <div class="modal-backdrop" data-pclose></div>
+  <div class="modal-panel is-narrow" role="dialog" aria-modal="true" aria-labelledby="projModalTitle">
+    <header class="modal-head">
+      <div>
+        <p class="modal-kicker" data-i18n="projectKicker">一级项目 / TOP LEVEL</p>
+        <h2 id="projModalTitle" data-i18n="projectNew">新建项目</h2>
+      </div>
+      <button class="modal-close" id="projectModalClose" type="button" aria-label="关闭">✕</button>
+    </header>
+
+    <div class="modal-body">
+      <!-- 说清"新建项目"建的是最外层的大项目（用户反馈：分区没问题，但显示容易误解） -->
+      <p class="modal-note" data-i18n="projectNewNote">项目是最外层容器：一个项目 = 一套独立的选品 / Listing 上下文，项目之间互不串味。</p>
+      <div class="field">
+        <label for="projName" data-i18n="projectNewName">项目名称</label>
+        <input id="projName" type="text" maxlength="40" autocomplete="off" spellcheck="false"
+               data-i18n-ph="projectNewPh" placeholder="例如：水杯项目">
+      </div>
+      <div class="field">
+        <label for="projDescInput" data-i18n="projectNewDesc">描述（可选）</label>
+        <input id="projDescInput" type="text" maxlength="80" autocomplete="off" spellcheck="false"
+               data-i18n-ph="projectNewDescPh" placeholder="例如：日本站保温杯，主打轻量">
+      </div>
+      <p class="modal-msg" id="projMsg"></p>
+    </div>
+
+    <footer class="modal-foot">
+      <button class="btn is-ghost" id="projectModalCancel" type="button" data-i18n="projectCancel">取消</button>
+      <button class="btn is-primary" id="projectModalSave" type="button" data-i18n="projectCreate">创建</button>
+    </footer>
+  </div>
+</div>
+
+<!-- ========== 右键菜单（项目行 / 会话行共用） ==========
+     行内不再放小图标：重命名 / 移除 / 移动 一律走右键；无键盘鼠标时可用「菜单键 / Shift+F10」。 -->
+<div class="ctx" id="ctxMenu" role="menu" aria-hidden="true" hidden>
+  <p class="ctx-title" id="ctxTitle"></p>
+  <ul class="ctx-list" id="ctxList"></ul>
+</div>
+
+<!-- ========== 会话重命名弹窗（项目重命名走 #projectModal，它还要带描述） ========== -->
+<div class="modal" id="renameModal" aria-hidden="true">
+  <div class="modal-backdrop" data-rclose></div>
+  <div class="modal-panel is-narrow" role="dialog" aria-modal="true" aria-labelledby="renameTitle">
+    <header class="modal-head">
+      <div>
+        <p class="modal-kicker">SESSION / TITLE</p>
+        <h2 id="renameTitle" data-i18n="talkRename">重命名会话</h2>
+      </div>
+      <button class="modal-close" id="renameClose" type="button" aria-label="关闭">✕</button>
+    </header>
+    <div class="modal-body">
+      <div class="field">
+        <label for="renameInput" data-i18n="renameLabel">会话名称</label>
+        <input id="renameInput" type="text" maxlength="40" autocomplete="off" spellcheck="false">
+      </div>
+      <p class="modal-msg" id="renameMsg"></p>
+    </div>
+    <footer class="modal-foot">
+      <button class="btn is-ghost" id="renameCancel" type="button" data-i18n="projectCancel">取消</button>
+      <button class="btn is-primary" id="renameSave" type="button" data-i18n="renameSave">保存</button>
     </footer>
   </div>
 </div>

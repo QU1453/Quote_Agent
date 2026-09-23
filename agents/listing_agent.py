@@ -12,6 +12,7 @@ import re
 from agents.base import ReActAgentBase
 from memory.access import MemoryCaller
 from tools.listing import (
+    audit_listing,
     check_images,
     draft_listing,
     price_strategy,
@@ -19,7 +20,7 @@ from tools.listing import (
 )
 
 # ---- 系统提示词：卖家工作台视角 ------------------------------------------------
-SYSTEM_PROMPT = """你是「SellPilot」卖家工作台的 Listing 智能体，帮卖家完成 Listing 创建与上架。
+SYSTEM_PROMPT = """你是「Quote Agent」卖家工作台的 Listing 智能体，帮卖家完成 Listing 创建与上架。
 
 工作方式：根据卖家的问题，自主调用工具获取结果，再给出可直接使用的 Listing 内容：
 - 写标题/五点/Search Terms → 调用 draft_listing；
@@ -39,7 +40,7 @@ class ListingAgent(ReActAgentBase):
     """Listing 智能体：文案/图片/定价/履约工具集。"""
 
     system_prompt = SYSTEM_PROMPT
-    tools = [draft_listing, check_images, price_strategy, recommend_fulfillment]
+    tools = [draft_listing, check_images, audit_listing, price_strategy, recommend_fulfillment]
     caller = MemoryCaller("listing_agent", "L1")
 
 

@@ -26,10 +26,7 @@ logs/
 .traecode
 
 # ===== 运行时数据（容器内由 volume 挂载生成，宿主机数据不进镜像）=====
-memory/short_term/data
-memory/long_term/data
-memory/data
+data/
 memory/demo_data
-core/telemetry/data
 *.sqlite
 *.sqlite-*

@@ -26,6 +26,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 
 import config  # 记忆参数槽位（K 窗口 / token 守卫），读取环境变量与默认值
 from .compress import Compressor
+from .projects import ProjectRegistry
 from .registry import ConversationRegistry, parse_summary
 
 # ---- token 估算（窗口组装守卫用）----
@@ -94,6 +95,8 @@ class ShortTermMemory:
         self._writer = self._compile_writer()
         # 谈话注册表（同连接）：谈话生命周期 + 一级总结归属 + 二级总结游标
         self.registry = ConversationRegistry(self._conn)
+        # 项目注册表（同连接）：一级「项目」容器 + 会话的 project_id / feature_key 归属
+        self.projects = ProjectRegistry(self._conn)
 
     # ---- 内部：一个挂在同一 saver 上的最小写图（invoke/update_state 即写入 checkpoint）----
     def _compile_writer(self):

@@ -2,7 +2,7 @@
 """输出格式化：wrap——统一输出契约 {reply, intent, data, route}。
 
 - reply：清洗后的自然语言回复；
-- intent：业务意图标签（research / listing / order / recommend / none）；
+- intent：业务意图标签（research / listing / order / recommend / interrupted / none）；
 - data：结构化卡片数据（透传，前端按 intent 渲染）；
 - route：实际处理的智能体名（调试与 /api/status 展示用）。
 """
@@ -12,7 +12,7 @@ from .validator import sanitize_reply
 
 __all__ = ["wrap"]
 
-_VALID_INTENTS = {"research", "listing", "order", "recommend", "none"}
+_VALID_INTENTS = {"research", "listing", "order", "recommend", "interrupted", "none"}
 
 
 def wrap(raw: dict | None, route: str = "") -> dict:

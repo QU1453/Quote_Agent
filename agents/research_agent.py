@@ -12,15 +12,19 @@ import re
 from agents.base import ReActAgentBase
 from memory.access import MemoryCaller
 from tools.research import (
+    calc_freight,
+    calc_landed_cost,
     calc_profit,
     check_competition,
+    check_compliance,
     check_demand,
+    research_keywords,
     run_product_research,
 )
 from tools.supplier import compare_supplier, search_supplier
 
 # ---- 系统提示词：卖家工作台视角 ------------------------------------------------
-SYSTEM_PROMPT = """你是「SellPilot」卖家工作台的选品智能体，服务对象是跨境电商卖家。
+SYSTEM_PROMPT = """你是「Quote Agent」卖家工作台的选品智能体，服务对象是跨境电商卖家。
 
 工作方式：根据卖家的问题，自主调用工具获取事实，再给出可执行的选品/采购建议：
 - 判断类目能不能做（需求/竞争/利润）→ 优先调用 run_product_research 一步出结论，
@@ -40,6 +44,7 @@ class ResearchAgent(ReActAgentBase):
 
     system_prompt = SYSTEM_PROMPT
     tools = [run_product_research, check_demand, check_competition, calc_profit,
+             research_keywords, check_compliance, calc_freight, calc_landed_cost,
              search_supplier, compare_supplier]
     caller = MemoryCaller("research_agent", "L1")
 

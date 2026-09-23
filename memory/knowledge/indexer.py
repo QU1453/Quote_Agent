@@ -18,6 +18,8 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
+import config
+
 from ..access import MemoryCaller, SYSTEM_CALLER, guard
 from .chunker import default_chunker
 
@@ -31,7 +33,7 @@ class KnowledgeBase:
 
     def __init__(self, base_dir: str | Path | None = None, llm=None,
                  chunk_size: int = 300, chunk_overlap: int = 50):
-        base = Path(base_dir) if base_dir else Path(__file__).resolve().parent.parent / "data"
+        base = Path(base_dir) if base_dir else config.DATA_DIR / "memory"
         self.db_path = base / "knowledge.sqlite"
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)

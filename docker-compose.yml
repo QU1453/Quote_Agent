@@ -6,8 +6,8 @@
 services:
   agent:
     build: .
-    image: sellpilot-agent:latest
-    container_name: sellpilot-agent
+    image: quote-agent:latest
+    container_name: quote-agent
     ports:
       - "8623:8623"
     environment:
@@ -36,16 +36,13 @@ services:
       TOOL_PLANNING_ROUNDS_BASE: ${TOOL_PLANNING_ROUNDS_BASE:-2}
       MCP_TRANSPORT: ${MCP_TRANSPORT:-inprocess}
     volumes:
-      # 运行时数据持久化（容器重建不丢）：短期记忆 checkpoint / 长期记忆 ANN /
-      # 权限审计 / 遥测库（调试后台 /debug 的数据源）
-      - sellpilot_short_term:/app/memory/short_term/data
-      - sellpilot_long_term:/app/memory/long_term/data
-      - sellpilot_audit:/app/memory/data
-      - sellpilot_telemetry:/app/core/telemetry/data
+      # 运行时数据持久化（容器重建不丢）：短期记忆 / 长期记忆 ANN / 知识库 /
+      # 状态规则 / 技能 / 中断续跑 / 权限审计 / 遥测库（调试后台 /debug 的数据源）
+      # 记忆类统一挂在 data/memory/ 下，遥测库在 data/telemetry/ 下（见 config.DATA_DIR）
+      - quote_memory:/app/data/memory
+      - quote_telemetry:/app/data/telemetry
     restart: unless-stopped
 
 volumes:
-  sellpilot_short_term:
-  sellpilot_long_term:
-  sellpilot_audit:
-  sellpilot_telemetry:
+  quote_memory:
+  quote_telemetry:

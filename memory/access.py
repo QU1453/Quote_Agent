@@ -5,7 +5,7 @@
 - 默认拒绝、显式授权：所有记忆写/改/删操作必须先过 guard()；
 - 读操作 L0 全员开放（状态记忆除外——它只做自动注入，不走读 API）；
 - 越权即抛 AccessError，且无论成败都落 memory_audit 审计表；
-- 审计库独立于各记忆模块库（memory/data/access.sqlite），数据文件均被 .gitignore 拦截。
+- 审计库独立于各记忆模块库（data/memory/access.sqlite），数据文件均被 .gitignore 拦截。
 
 用法：
     from memory.access import MemoryCaller, guard, AccessError
@@ -19,7 +19,8 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
+
+import config
 
 # ---- 等级定义（L9=人类用户，全权限）--------------------------------------------------
 LEVEL_ORDER = {"L0": 0, "L1": 1, "L2": 2, "L3": 3, "L9": 9}
@@ -32,6 +33,7 @@ _WRITE_LEVEL = {
     "knowledge": "L1",
     "skill": "L2",
     "state": "L3",
+    "interrupt": "L0",  # 中断日志：会话级交接班记录，与短期记忆同档（仅本人会话）
 }
 _MODIFY_LEVEL = {
     "short_term": "L0",
@@ -39,6 +41,7 @@ _MODIFY_LEVEL = {
     "knowledge": "L3",
     "skill": "L2",  # 技能晋升/降级由 L2 专门 agent 自理
     "state": "L3",
+    "interrupt": "L0",  # 续跑标记（open → resumed）由本人会话收尾时写
 }
 
 
@@ -90,12 +93,13 @@ def guard(module: str, op: str, caller: MemoryCaller) -> None:
 
 
 class AuditLogger:
-    """审计日志：独立 SQLite 单例（memory/data/access.sqlite），写失败不阻断主流程。"""
+    """审计日志：独立 SQLite 单例（data/memory/access.sqlite），写失败不阻断主流程。"""
 
     _lock = threading.Lock()
     _conn: sqlite3.Connection | None = None
 
-    _DB_PATH = Path(__file__).resolve().parent / "data" / "access.sqlite"
+    # 审计库路径走 config.DATA_DIR（不能用 __file__：打包后会落到解包临时目录，重启即丢）
+    _DB_PATH = config.DATA_DIR / "memory" / "access.sqlite"
 
     @classmethod
     def _get_conn(cls) -> sqlite3.Connection | None:
